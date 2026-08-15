@@ -307,7 +307,7 @@ def normalize_dataset(raw: str) -> str | None:
 
 
 def _table_key(normalized: str) -> str:
-    """Last dot-segment: `analytics.simulated_trials` -> `simulated_trials`."""
+    """Last dot-segment: `analytics.orders` -> `orders`."""
     return normalized.split(".")[-1]
 
 

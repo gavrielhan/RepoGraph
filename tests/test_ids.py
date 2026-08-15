@@ -2,9 +2,7 @@ from repograph import ids
 
 
 def test_symbol_id_scheme():
-    assert ids.symbol_id("axiom_tox_poc", "grid_master.py", "run_grid") == (
-        "axiom_tox_poc::grid_master.py::run_grid"
-    )
+    assert ids.symbol_id("app", "run.py", "run_job") == "app::run.py::run_job"
 
 
 def test_module_and_repo_ids():
@@ -23,4 +21,4 @@ def test_parse_id_roundtrip():
 
 
 def test_dataset_id():
-    assert ids.dataset_id("simulated_trials") == "dataset::simulated_trials"
+    assert ids.dataset_id("orders") == "dataset::orders"

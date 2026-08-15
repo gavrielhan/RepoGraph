@@ -44,8 +44,8 @@ jobs:
         with:
           # Graph the in-repo fixtures; no clone, no Aura secrets required.
           repos: |
-            axiom/axiom_core
-            axiom/axiom_tox_poc
+            acme/corelib
+            acme/app
           clone-dir: tests/fixtures
           use-existing-checkout: "true"
           neo4j-uri: bolt://localhost:7687
@@ -57,4 +57,4 @@ jobs:
           REPOGRAPH_NEO4J_PASSWORD: testpassword
         run: |
           pip install --quiet .
-          repograph query --changed 'axiom_core::axiom_core/utils.py::load_config'
+          repograph query --changed 'corelib::corelib/utils.py::load_config'

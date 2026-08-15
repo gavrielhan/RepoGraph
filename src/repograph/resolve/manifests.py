@@ -7,8 +7,8 @@ can emit the cross-repo edge.
 
 Supported manifests: pyproject.toml, setup.py, package.json, go.mod,
 build.sbt. Names are normalized (dashes -> underscores, lowercased) because
-Python distribution names ("axiom-core") differ from import names
-("axiom_core").
+Python distribution names ("core-lib") differ from import names
+("corelib").
 """
 
 from __future__ import annotations

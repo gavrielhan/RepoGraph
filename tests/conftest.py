@@ -8,8 +8,8 @@ FIXTURES = Path(__file__).parent / "fixtures"
 @pytest.fixture(scope="session")
 def repo_roots() -> dict[str, Path]:
     return {
-        "axiom_core": FIXTURES / "axiom_core",
-        "axiom_tox_poc": FIXTURES / "axiom_tox_poc",
+        "corelib": FIXTURES / "corelib",
+        "app": FIXTURES / "app",
     }
 
 

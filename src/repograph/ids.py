@@ -12,7 +12,7 @@ Scheme:
 repo-relative POSIX path, and `qualname` is the dot-joined nesting of
 definition names (e.g. ``OuterClass.method``).
 
-Example: ``axiom_tox_poc::grid_master.py::run_grid``
+Example: ``app::run.py::run_job``
 """
 
 from __future__ import annotations

@@ -96,8 +96,8 @@ def test_parse_github_remote():
 
 
 def test_infer_graph_repo_normalizes_dashes():
-    nodes = [Node(id="axiom_core", kind="repo", name="axiom_core", repo="axiom_core")]
-    assert infer_graph_repo(Path("/tmp/axiom-core"), nodes, hint="axiom-core") == "axiom_core"
+    nodes = [Node(id="corelib", kind="repo", name="corelib", repo="corelib")]
+    assert infer_graph_repo(Path("/tmp/does-not-exist-xyz"), nodes, hint="CoreLib") == "corelib"
 
 
 def test_branch_diff_vs_main(tmp_path):

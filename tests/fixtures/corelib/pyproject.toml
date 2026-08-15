@@ -1,6 +1,6 @@
 [project]
-name = "axiom-core"
+name = "corelib"
 version = "1.0.0"
 
 [tool.setuptools]
-packages = ["axiom_core"]
+packages = ["corelib"]

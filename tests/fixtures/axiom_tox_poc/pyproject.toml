@@ -1,4 +1,0 @@
-[project]
-name = "axiom-tox-poc"
-version = "0.3.0"
-dependencies = ["axiom-core>=1.0"]

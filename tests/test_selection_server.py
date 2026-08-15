@@ -8,8 +8,8 @@ from repograph.auth.selection_server import SelectionServer
 
 REPOS = [
     {
-        "full_name": "axiom/core", "name": "core", "owner": "axiom",
-        "clone_url": "https://github.com/axiom/core.git",
+        "full_name": "acme/core", "name": "core", "owner": "acme",
+        "clone_url": "https://github.com/acme/core.git",
         "language": "Python", "pushed_at": "2026-08-01T00:00:00Z", "private": True,
     }
 ]
@@ -36,7 +36,7 @@ def test_select_page_injects_repos(server):
     server.set_repos(REPOS)
     status, body = get(server.select_url)
     assert status == 200
-    assert "axiom/core" in body
+    assert "acme/core" in body
     assert "Select repos to include" in body
     assert "Build graph" in body
 
@@ -76,7 +76,7 @@ def test_selection_roundtrip(server):
     t = threading.Thread(target=wait)
     t.start()
 
-    payload = json.dumps([{"full_name": "axiom/core", "clone_url": "https://github.com/axiom/core.git"}])
+    payload = json.dumps([{"full_name": "acme/core", "clone_url": "https://github.com/acme/core.git"}])
     req = urllib.request.Request(
         f"http://127.0.0.1:{server.port}/selection",
         data=payload.encode(),
@@ -85,7 +85,7 @@ def test_selection_roundtrip(server):
     status = urllib.request.urlopen(req, timeout=5).status
     t.join(timeout=5)
     assert status == 200
-    assert result["selection"][0]["full_name"] == "axiom/core"
+    assert result["selection"][0]["full_name"] == "acme/core"
 
 
 def test_selection_rejects_bad_json(server):

@@ -8,42 +8,42 @@ def by_id(nodes):
 class TestPythonParsing:
     def test_definitions_and_docstrings(self, parsed):
         nodes = by_id(parsed.nodes)
-        run = nodes["axiom_core::axiom_core/utils.py::GridEngine.run"]
+        run = nodes["corelib::corelib/utils.py::Engine.run"]
         assert run.kind == "method"
-        assert run.signature == "run(self, grid, n_jobs=1)"  # defaults kept for signature diffs
-        assert run.docstring == "Execute the grid."
+        assert run.signature == "run(self, job, n_jobs=1)"
+        assert run.docstring == "Execute the job."
         assert run.start_line and run.end_line and run.start_line < run.end_line
 
     def test_nested_qualnames_and_kinds(self, parsed):
         nodes = by_id(parsed.nodes)
-        assert nodes["axiom_core::axiom_core/utils.py::GridEngine"].kind == "class"
-        assert nodes["axiom_core::axiom_core/utils.py::_expand"].kind == "function"
+        assert nodes["corelib::corelib/utils.py::Engine"].kind == "class"
+        assert nodes["corelib::corelib/utils.py::_expand"].kind == "function"
 
     def test_scoped_calls(self, parsed):
         calls = [
             p for p in parsed.pending
-            if p.type == "CALLS_PENDING" and p.src_file == "grid_master.py"
+            if p.type == "CALLS_PENDING" and p.src_file == "run.py"
         ]
         scoped = {(c.src_scope, c.target) for c in calls}
-        assert ("run_grid", "load_config") in scoped
-        assert ("run_grid", "GridEngine") in scoped
-        assert ("ToxGrid.summarize", "spark.table") in scoped
+        assert ("run_job", "load_config") in scoped
+        assert ("run_job", "Engine") in scoped
+        assert ("AppEngine.summarize", "spark.table") in scoped
 
     def test_imports_capture_names(self, parsed):
         imports = [
             p for p in parsed.pending
-            if p.type == "IMPORTS_PENDING" and p.target == "axiom_core.utils"
+            if p.type == "IMPORTS_PENDING" and p.target == "corelib.utils"
         ]
         names = {n for p in imports for n in p.meta.get("names", [])}
-        assert {"GridEngine", "load_config"} <= names
+        assert {"Engine", "load_config"} <= names
 
     def test_data_edges_from_python(self, parsed):
         produces = {(p.src_file, p.target) for p in parsed.pending if p.type == "PRODUCES_PENDING"}
         consumes = {(p.src_file, p.target) for p in parsed.pending if p.type == "CONSUMES_PENDING"}
-        assert ("axiom_core/io.py", "simulated_trials") in produces  # df.to_parquet
-        assert ("axiom_core/io.py", "trial_summary") in produces  # .write.saveAsTable
-        assert ("grid_master.py", "simulated_trials") in consumes  # pd.read_parquet
-        assert ("grid_master.py", "trial_summary") in consumes  # spark.table
+        assert ("corelib/io.py", "orders") in produces
+        assert ("corelib/io.py", "order_summary") in produces
+        assert ("run.py", "orders") in consumes
+        assert ("run.py", "order_summary") in consumes
 
 
 class TestSqlParsing:
@@ -52,7 +52,7 @@ class TestSqlParsing:
         produces = {p.target for p in sql if p.type == "PRODUCES_PENDING"}
         consumes = {p.target for p in sql if p.type == "CONSUMES_PENDING"}
         assert produces == {"monthly_report", "audit_log"}
-        assert {"simulated_trials", "trial_summary", "monthly_report"} <= consumes
+        assert {"orders", "order_summary", "monthly_report"} <= consumes
 
 
 class TestOtherLanguages:
