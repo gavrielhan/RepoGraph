@@ -36,13 +36,28 @@ def blast_radius(loader: Neo4jLoader, symbol_id: str, max_depth: int = 10) -> li
     return loader.run_query(BLAST_RADIUS_CYPHER % max_depth, id=symbol_id)
 
 
-def format_results(results: list[dict], changed_id: str) -> str:
+def format_results(
+    results: list[dict],
+    changed_id: str,
+    changed_ids: list[str] | None = None,
+) -> str:
+    changed_ids = changed_ids or []
     if not results:
-        return f"No downstream dependents found for {changed_id}."
+        body = [f"No downstream dependents found for {changed_id}."]
+        if len(changed_ids) > 1:
+            body.append("")
+            body.append("Changed symbols:")
+            body.extend(f"  {cid}" for cid in changed_ids)
+        return "\n".join(body)
     lines = [f"Blast radius for {changed_id} ({len(results)} affected):", ""]
+    if len(changed_ids) > 1:
+        lines.append("Changed symbols:")
+        lines.extend(f"  {cid}" for cid in changed_ids)
+        lines.append("")
     owners: dict[str, list[dict]] = {}
     for r in results:
         owners.setdefault(r.get("owner") or "(no owner)", []).append(r)
+    lines.append("Affected:")
     for owner in sorted(owners):
         lines.append(f"  {owner}")
         for r in owners[owner]:

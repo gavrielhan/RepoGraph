@@ -3,7 +3,7 @@
 Commands:
   activate  interactive: auth -> selection -> clone -> pipeline -> load
   run       headless (CI): token + repo list from env/config
-  query     blast-radius from a changed symbol or a git diff
+    query     blast-radius of the current branch, a PR, a diff, or a symbol
   reindex   re-run parse/resolve/load (incremental unless --full)
 
 Config resolution order: CLI flags > repograph.yaml in cwd > env vars.
@@ -158,22 +158,32 @@ def _build(cfg: Config, specs: list[RepoSpec], token: str):
 @main.command()
 @_common_options
 @click.option("--changed", "changed_id", default=None, help="Changed node id (repo::path::qualname).")
-@click.option("--diff", "diff_ref", default=None, help="Git ref to diff against (e.g. origin/main); maps the diff to changed symbols.")
-@click.option("--repo", "diff_repo", default=None, help="Restrict --diff to one configured repo.")
+@click.option("--diff", "diff_ref", default=None, help="Git ref to diff against (e.g. origin/main).")
+@click.option("--branch", "branch_ref", default=None, is_flag=False, flag_value="HEAD",
+              help="Blast radius of a local branch vs its merge-base. Pass a branch name, or omit the value for HEAD.")
+@click.option("--pr", "pr_spec", default=None, help="GitHub PR: 42, owner/repo#42, or a pull URL.")
+@click.option("--base", "base_ref", default=None, help="Base ref for --branch (default: origin/HEAD, then main/master).")
+@click.option("--committed", is_flag=True, help="With --branch, ignore uncommitted working-tree changes.")
+@click.option("--repo", "diff_repo", default=None, help="Graph repo name (or owner/name) to restrict the diff to.")
 @click.option("--max-depth", default=10, show_default=True, help="Maximum traversal depth.")
-def query(changed_id, diff_ref, diff_repo, max_depth, **kwargs):
-    """Blast radius: who is affected if this symbol changes?"""
-    cfg = _cfg(kwargs)
-    if not changed_id and not diff_ref:
-        raise click.ClickException("pass --changed <node id> or --diff <git ref>")
+def query(changed_id, diff_ref, branch_ref, pr_spec, base_ref, committed, diff_repo, max_depth, **kwargs):
+    """Blast radius of a symbol, the current branch, or a GitHub PR.
 
-    changed_ids = [changed_id] if changed_id else []
-    if diff_ref:
-        changed_ids.extend(_ids_from_diff(cfg, diff_ref, diff_repo))
-        if not changed_ids:
-            click.echo("Diff maps to no indexed symbols; nothing to report.")
-            return
-        click.echo(f"Changed nodes from diff: {len(changed_ids)}")
+    With no flags, diffs the current branch (plus uncommitted changes) against
+    the default base — the preview of a PR you have not opened yet.
+    """
+    cfg = _cfg(kwargs)
+    sources = [bool(changed_id), bool(diff_ref), branch_ref is not None, bool(pr_spec)]
+    if sum(sources) > 1:
+        raise click.ClickException("pass only one of --changed, --diff, --branch, or --pr")
+
+    if not any(sources):
+        branch_ref = "HEAD"  # default: current branch / possible PR
+
+    header, changed_ids = _resolve_changed(cfg, changed_id, diff_ref, branch_ref, pr_spec, base_ref, committed, diff_repo)
+    if not changed_ids:
+        click.echo("No indexed symbols in this change; nothing to report.")
+        return
 
     from repograph.load.neo4j_loader import Neo4jLoader
     from repograph.query.blast_radius import blast_radius, format_results
@@ -187,32 +197,131 @@ def query(changed_id, diff_ref, diff_repo, max_depth, **kwargs):
                 if prev is None or (r.get("confidence") or 0) > (prev.get("confidence") or 0):
                     seen[r["id"]] = r
         results = sorted(seen.values(), key=lambda r: (r.get("distance", 0), -(r.get("confidence") or 0)))
-        header = changed_ids[0] if len(changed_ids) == 1 else f"{len(changed_ids)} changed nodes"
-        click.echo(format_results(results, header))
+        click.echo(format_results(results, header, changed_ids=changed_ids))
     finally:
         loader.close()
 
 
-def _ids_from_diff(cfg: Config, ref: str, only_repo: str | None) -> list[str]:
-    from repograph.query.diff import changed_line_ranges, changed_node_ids
+main.add_command(query, name="blast")
 
+
+def _resolve_changed(
+    cfg: Config,
+    changed_id,
+    diff_ref,
+    branch_ref,
+    pr_spec,
+    base_ref,
+    committed,
+    diff_repo,
+) -> tuple[str, list[str]]:
+    if changed_id:
+        return changed_id, [changed_id]
+
+    nodes = _load_nodes(cfg)
+
+    if pr_spec:
+        from repograph.query.pr import PRError, github_token, parse_pr_spec, pr_diff_ranges
+
+        root = _cwd_git_root()
+        try:
+            owner, repo, number = parse_pr_spec(pr_spec, root)
+        except PRError as e:
+            raise click.ClickException(str(e))
+        try:
+            meta, ranges = pr_diff_ranges(owner, repo, number, github_token(cfg))
+        except PRError as e:
+            raise click.ClickException(str(e))
+        graph_repo = _graph_repo(nodes, hint=diff_repo or repo, root=root)
+        ids = _ids_from_ranges(nodes, graph_repo, ranges)
+        title = meta.get("title") or f"#{number}"
+        header = f"PR {meta['full_name']}#{number} ({title})"
+        click.echo(f"{header}: {len(ids)} changed symbol(s) vs {meta.get('base') or 'base'}")
+        return header, ids
+
+    if branch_ref is not None:
+        from repograph.query.diff import branch_diff_ranges, current_branch, git_root
+
+        root = git_root()
+        if root is None:
+            raise click.ClickException("not inside a git checkout; pass --changed, --diff, or --pr")
+        branch = "HEAD" if branch_ref in ("HEAD", "") else branch_ref
+        try:
+            resolved_base, ranges = branch_diff_ranges(
+                root, branch=branch, base=base_ref, include_uncommitted=not committed,
+            )
+        except Exception as e:
+            raise click.ClickException(f"could not diff against the base branch: {e}")
+        graph_repo = _graph_repo(nodes, hint=diff_repo, root=root)
+        ids = _ids_from_ranges(nodes, graph_repo, ranges)
+        name = current_branch(root) if branch == "HEAD" else branch
+        header = f"branch {name} vs {resolved_base}"
+        extra = "" if committed else " (including uncommitted changes)"
+        click.echo(f"{header}{extra}: {len(ids)} changed symbol(s)")
+        return header, ids
+
+    # --diff <ref>
+    ids = _ids_from_diff(cfg, diff_ref, diff_repo, nodes)
+    click.echo(f"Changed nodes from diff against {diff_ref}: {len(ids)}")
+    return f"diff vs {diff_ref}", ids
+
+
+def _load_nodes(cfg: Config):
     try:
         nodes, _ = load_ir(cfg)
     except FileNotFoundError:
         raise click.ClickException("no IR found; run `repograph reindex` or `repograph run` first")
+    return nodes
+
+
+def _cwd_git_root():
+    from repograph.query.diff import git_root
+
+    return git_root()
+
+
+def _graph_repo(nodes, hint: str | None = None, root=None):
+    from repograph.query.diff import infer_graph_repo
+
+    name_hint = hint
+    if name_hint and "/" in name_hint:
+        name_hint = name_hint.split("/")[-1]
+    if root is not None:
+        return infer_graph_repo(root, nodes, hint=name_hint)
+    if name_hint:
+        return infer_graph_repo(Path.cwd(), nodes, hint=name_hint)
+    return name_hint
+
+
+def _ids_from_ranges(nodes, repo: str | None, ranges) -> list[str]:
+    from repograph.query.diff import changed_node_ids
+
+    if not repo:
+        raise click.ClickException("could not match this checkout to a repo in the graph")
+    return sorted(set(changed_node_ids(nodes, repo, ranges)))
+
+
+def _ids_from_diff(cfg: Config, ref: str, only_repo: str | None, nodes=None) -> list[str]:
+    from repograph.query.diff import changed_line_ranges, changed_node_ids, git_root, infer_graph_repo
+
+    if nodes is None:
+        nodes = _load_nodes(cfg)
 
     out: list[str] = []
     repo_dirs = {p.name: p for p in cfg.clone_dir.iterdir() if (p / ".git").exists()} if cfg.clone_dir.exists() else {}
-    if Path(".git").exists():  # allow running inside a target repo checkout
-        repo_dirs.setdefault(Path.cwd().name, Path.cwd())
-    for repo, root in repo_dirs.items():
-        if only_repo and repo != only_repo:
+    cwd_root = git_root()
+    if cwd_root is not None:
+        repo_dirs.setdefault(cwd_root.name, cwd_root)
+    for name, root in repo_dirs.items():
+        graph_repo = infer_graph_repo(root, nodes, hint=only_repo or name)
+        if only_repo and graph_repo != only_repo and name != only_repo:
             continue
         try:
             ranges = changed_line_ranges(root, ref)
         except Exception:
             continue
-        out.extend(changed_node_ids(nodes, repo, ranges))
+        if graph_repo:
+            out.extend(changed_node_ids(nodes, graph_repo, ranges))
     return sorted(set(out))
 
 

@@ -52,12 +52,13 @@ jobs:
       - name: Install repograph
         run: pip install --quiet .
 
-      - name: Blast radius for PR diff
+      - name: Blast radius for PR
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           REPOGRAPH_NEO4J_URI: ${{ secrets.NEO4J_URI }}
           REPOGRAPH_NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
         run: |
-          repograph query --diff "origin/${{ github.base_ref }}" \
+          repograph query --pr "${{ github.repository }}#${{ github.event.pull_request.number }}" \
             > blast_radius.txt || true
           cat blast_radius.txt
 

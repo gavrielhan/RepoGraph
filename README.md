@@ -62,14 +62,36 @@ repograph query --changed 'axiom_core::axiom_core/utils.py::load_config'
 ```
 Blast radius for axiom_core::axiom_core/utils.py::load_config (4 affected):
 
-  @axiom/analytics-team
-    axiom_tox_poc::reports.sql  (repo=axiom_tox_poc, dist=2  conf=0.80)
-  @axiom/data-team
-    axiom_core::axiom_core/io.py::persist_trials  (repo=axiom_core, dist=1  conf=0.95)
+  Affected:
+    @axiom/analytics-team
+      axiom_tox_poc::reports.sql  (repo=axiom_tox_poc, dist=2  conf=0.80)
+    @axiom/data-team
+      axiom_core::axiom_core/io.py::persist_trials  (repo=axiom_core, dist=1  conf=0.95)
   ...
 ```
 
-Or map a whole git diff to affected owners:
+On a feature branch, preview the blast radius of the PR you have not opened yet
+(working tree included, compared to `origin/main` / `main`):
+
+```bash
+repograph query            # current branch vs default base
+repograph blast            # same command, shorter name
+repograph query --branch   # explicit
+repograph query --committed  # ignore uncommitted files
+```
+
+For an open GitHub pull request:
+
+```bash
+repograph query --pr 42
+repograph query --pr owner/repo#42
+repograph query --pr https://github.com/owner/repo/pull/42
+```
+
+`--pr 42` uses `origin` of the current checkout. Private PRs need `GITHUB_TOKEN`
+(or the token cached by `repograph activate`).
+
+You can still map a raw git ref:
 
 ```bash
 repograph query --diff origin/main
@@ -88,8 +110,11 @@ repograph reindex --full   # rewrite everything
 | --- | --- |
 | `repograph activate` | Interactive: auth → browser selection → clone → pipeline → load. |
 | `repograph run --headless` | CI mode: token from `GITHUB_TOKEN`, repo list from config/`--repos`. |
+| `repograph query` | Blast radius of the **current branch** vs its merge-base (possible PR). |
+| `repograph blast` | Alias for `query`. |
+| `repograph query --pr <n\|url>` | Blast radius of an **open GitHub PR**. |
 | `repograph query --changed <id>` | Blast radius for one node id. |
-| `repograph query --diff <ref>` | Git diff → changed node ids → blast radius. |
+| `repograph query --diff <ref>` | Git diff against an explicit ref → blast radius. |
 | `repograph reindex [--full]` | Re-run parse/resolve/load on existing checkouts. |
 
 Config resolution order: **CLI flags → `repograph.yaml` in cwd → env vars**
