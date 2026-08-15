@@ -30,6 +30,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Restore previous graph
+        run: |
+          git fetch origin graph:refs/remotes/origin/graph || true
+          if git rev-parse --verify --quiet origin/graph; then
+            git restore --source origin/graph -- graph
+          fi
 
       - name: Build graph
         uses: gavrielhan/RepoGraph/action@main
@@ -37,7 +46,8 @@ jobs:
           repos: |
             ${{ github.repository }}
           use-existing-checkout: "true"
-          clone-dir: .
+          # The action expects clone-dir/<repo-name>; the checkout is ../<repo-name>.
+          clone-dir: ..
           ir-dir: graph
           neo4j-uri: ${{ secrets.NEO4J_URI }}
           neo4j-password: ${{ secrets.NEO4J_PASSWORD }}
@@ -45,6 +55,16 @@ jobs:
 
       - name: Publish graph branch
         run: |
+          cp -R graph "${RUNNER_TEMP}/repograph-graph"
+          rm -rf graph
+          if git rev-parse --verify --quiet origin/graph; then
+            git switch -C graph origin/graph
+          else
+            git switch --orphan graph
+            git rm -rf . || true
+          fi
+          rm -rf graph
+          cp -R "${RUNNER_TEMP}/repograph-graph" graph
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add graph
@@ -53,8 +73,6 @@ jobs:
             exit 0
           fi
           git commit -m "index ${GITHUB_SHA}"
-          git fetch origin graph || true
-          git checkout -B graph
           git push origin graph
 
   blast-radius-comment:
@@ -68,6 +86,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Restore graph
+        run: |
+          git fetch origin graph:refs/remotes/origin/graph
+          git restore --source origin/graph -- graph
+
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -80,6 +103,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           REPOGRAPH_NEO4J_URI: ${{ secrets.NEO4J_URI }}
           REPOGRAPH_NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
+          REPOGRAPH_IR_DIR: graph
         run: |
           repograph query --pr "${{ github.repository }}#${{ github.event.pull_request.number }}" \
             > blast_radius.txt || true
