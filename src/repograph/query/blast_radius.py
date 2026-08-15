@@ -32,8 +32,56 @@ ORDER BY distance, confidence DESC, repo, path
 """
 
 
+DEPENDENCY_REL = {"CALLS", "IMPORTS", "CONSUMES", "INHERITS"}
+
+
 def blast_radius(loader: Neo4jLoader, symbol_id: str, max_depth: int = 10) -> list[dict]:
     return loader.run_query(BLAST_RADIUS_CYPHER % max_depth, id=symbol_id)
+
+
+def blast_radius_ir(nodes: list, edges: list, symbol_id: str, max_depth: int = 10) -> list[dict]:
+    """Same reverse reachability over the JSONL IR — used when Neo4j is not configured
+    (graph files committed to GitHub)."""
+    from collections import deque
+
+    by_id = {n.id: n for n in nodes}
+    inbound: dict[str, list[tuple[str, float]]] = {}
+    for e in edges:
+        if e.type not in DEPENDENCY_REL:
+            continue
+        conf = e.meta.get("confidence")
+        inbound.setdefault(e.dst, []).append((e.src, conf if isinstance(conf, (int, float)) else 1.0))
+
+    best: dict[str, tuple[int, float]] = {}
+    q = deque()
+    for src, edge_conf in inbound.get(symbol_id, []):
+        best[src] = (1, edge_conf)
+        q.append(src)
+    while q:
+        nid = q.popleft()
+        dist, conf = best[nid]
+        if dist >= max_depth:
+            continue
+        for src, edge_conf in inbound.get(nid, []):
+            next_dist, next_conf = dist + 1, min(conf, edge_conf)
+            prev = best.get(src)
+            if prev is None or next_dist < prev[0] or (next_dist == prev[0] and next_conf > prev[1]):
+                best[src] = (next_dist, next_conf)
+                q.append(src)
+
+    rows = []
+    for nid, (dist, conf) in best.items():
+        n = by_id.get(nid)
+        rows.append({
+            "id": nid,
+            "repo": n.repo if n else None,
+            "path": n.path if n else None,
+            "owner": n.owner if n else None,
+            "confidence": conf,
+            "distance": dist,
+        })
+    rows.sort(key=lambda r: (r["distance"], -(r["confidence"] or 0), r.get("repo") or "", r.get("path") or ""))
+    return rows
 
 
 def format_results(

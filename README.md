@@ -3,8 +3,8 @@
 Cross-repository code knowledge graph in Neo4j.
 
 Authenticate with GitHub, pick repos, parse them into a symbol/dependency
-graph, load Neo4j, and query blast radius. The same pipeline runs headless
-in GitHub Actions.
+graph, and query blast radius. The same pipeline runs on every push via
+GitHub Actions.
 
 ```
 activate / run
@@ -13,64 +13,53 @@ activate / run
 
 ## Install
 
-Python 3.11+ and a reachable Neo4j 5.x.
+Python 3.11+. Neo4j 5.x is optional if you keep the IR in git (`--offline`).
 
 ```bash
 pip install .
-docker run -d --name repograph-neo4j -p 7687:7687 -p 7474:7474 \
-  -e NEO4J_AUTH=neo4j/testpassword neo4j:5
-cp repograph.example.yaml repograph.yaml   # neo4j + github.client_id
+cp repograph.example.yaml repograph.yaml
 repograph activate
 ```
 
-Device flow is the default (no client secret in the CLI). Optional localhost
-web flow: register your own OAuth app and set `github.auth_flow: web`.
+Device flow is the default. Optional localhost web flow: your own OAuth app
+and `github.auth_flow: web`.
 
 ## Query
 
 ```bash
-repograph query                         # current branch vs origin/main (possible PR)
+repograph query                         # current branch vs origin/main
 repograph query --pr 42                 # open GitHub PR
-repograph query --pr owner/repo#42
 repograph query --changed 'repo::path.py::fn'
-repograph query --diff origin/main
+repograph query --offline               # use graph JSONL, no Neo4j
+repograph runs                          # what each index run changed
+repograph runs --sha abc123
 repograph reindex                       # incremental; --full to rewrite
 ```
 
-`repograph blast` is an alias for `query`. Config order: CLI flags →
-`repograph.yaml` → env (`REPOGRAPH_NEO4J_*`, `GITHUB_TOKEN`, …).
-`CI=true` or `--headless` skips the browser.
+`repograph blast` is an alias for `query`. Config: CLI flags →
+`repograph.yaml` → env. `CI=true` or `--headless` skips the browser.
+
+## History
+
+The live graph is current-only. Each build appends an **index run**
+(git SHA, time, upserted/deleted node ids) to `runs.jsonl` and, when Neo4j
+is configured, to `(:IndexRun)-[:RECORDED]->(:Change)`.
+
+GitHub cannot host Neo4j. What *can* sit in GitHub is the IR
+(`nodes.jsonl`, `edges.jsonl`, `runs.jsonl`). Actions rebuild it on every
+push to `main` and commit it to a `graph` branch. Point Neo4j Aura at the
+same run if you want Cypher.
+
+Copy `examples/github-workflow.yml` into each indexed repo (or one data
+repo that lists them all).
 
 ## Schema
 
-Nodes: `Repo`, `Module`, `Symbol`, `Dataset`.  
+Nodes: `Repo`, `Module`, `Symbol`, `Dataset`, `IndexRun`, `Change`.  
 Edges: `DEFINES`, `CONTAINS`, `CALLS`, `IMPORTS`, `INHERITS`, `PRODUCES`,
-`CONSUMES` (reader→dataset and reader→writer).
+`CONSUMES`, `RECORDED`, `TOUCHED`.
 
-IDs: `repo`, `repo::path`, `repo::path::qualname`, `dataset::name`.
-
-Resolution is fuzzy (scope, then name match, then package manifests). Edges
-carry `confidence`. Dynamic dispatch is invisible; rank, don't hard-gate.
-SCIP can plug in via `resolve/scip.py` without changing the loader.
-
-Languages: Python, SQL, JS, TS, Java, Scala, Go, Bash. Add a `.scm` query
-file under `parse/queries/` to add another.
-
-## GitHub Action
-
-CI in this repo runs tests and loads the fixture graph into a Neo4j service.
-To index other repos into Aura, copy `examples/github-workflow.yml`.
-
-```yaml
-- uses: gavrielhan/RepoGraph/action@main
-  with:
-    repos: |
-      your-org/service-a
-      your-org/service-b
-    neo4j-uri: ${{ secrets.NEO4J_URI }}
-    neo4j-password: ${{ secrets.NEO4J_PASSWORD }}
-    github-token: ${{ secrets.REPOGRAPH_CLONE_TOKEN }}  # contents: read
-```
+IDs: `repo`, `repo::path`, `repo::path::qualname`.
 
 ## Dev
 

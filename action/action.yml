@@ -1,8 +1,8 @@
 name: repograph
 description: >
-  Build a cross-repository code knowledge graph in Neo4j from CI.
-  Headless: no browser, no OAuth; uses GITHUB_TOKEN (contents: read) and a
-  repo list from inputs or repograph.yaml.
+  Rebuild the code knowledge graph on push. Writes IR + index-run history
+  (committable to GitHub). Optionally loads Neo4j (Aura / self-hosted) —
+  GitHub cannot host Neo4j itself.
 
 inputs:
   repos:
@@ -10,15 +10,17 @@ inputs:
     required: false
     default: ""
   neo4j-uri:
-    description: Neo4j URI reachable from the runner (e.g. neo4j+s://xxxx.databases.neo4j.io).
-    required: true
+    description: Neo4j URI. Leave empty to skip the database and keep IR only.
+    required: false
+    default: ""
   neo4j-user:
     description: Neo4j user.
     required: false
     default: neo4j
   neo4j-password:
-    description: Neo4j password. Pass a repository secret.
-    required: true
+    description: Neo4j password. Empty skips the Neo4j load.
+    required: false
+    default: ""
   github-token:
     description: Token used to clone the target repos. Needs contents:read on each of them.
     required: false
@@ -31,6 +33,10 @@ inputs:
     description: Directory the repos are cloned into (or already checked out in).
     required: false
     default: repos
+  ir-dir:
+    description: Where to write nodes.jsonl, edges.jsonl, runs.jsonl (commit this to store the graph in git).
+    required: false
+    default: graph
   full:
     description: Set "true" to force a full (non-incremental) reload.
     required: false
@@ -52,10 +58,13 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
+        GITHUB_SHA: ${{ github.sha }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
         REPOGRAPH_NEO4J_URI: ${{ inputs.neo4j-uri }}
         REPOGRAPH_NEO4J_USER: ${{ inputs.neo4j-user }}
         REPOGRAPH_NEO4J_PASSWORD: ${{ inputs.neo4j-password }}
         REPOGRAPH_CLONE_DIR: ${{ inputs.clone-dir }}
+        REPOGRAPH_IR_DIR: ${{ inputs.ir-dir }}
       run: |
         ARGS=""
         while IFS= read -r repo; do

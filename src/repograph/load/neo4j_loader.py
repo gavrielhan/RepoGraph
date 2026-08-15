@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import json
+
 from repograph.ir import Edge, Node
 
 KIND_LABEL = {
@@ -20,6 +22,7 @@ KIND_LABEL = {
     "class": "Symbol",
 }
 LABELS = sorted(set(KIND_LABEL.values()))
+HISTORY_LABELS = ["IndexRun", "Change"]
 BATCH_SIZE = 5000
 
 
@@ -40,7 +43,7 @@ class Neo4jLoader:
 
     def ensure_constraints(self) -> None:
         with self._session() as session:
-            for label in LABELS:
+            for label in LABELS + HISTORY_LABELS:
                 session.run(
                     f"CREATE CONSTRAINT {label.lower()}_id IF NOT EXISTS "
                     f"FOR (s:{label}) REQUIRE s.id IS UNIQUE"
@@ -48,7 +51,7 @@ class Neo4jLoader:
 
     # ---- loading ---------------------------------------------------------
 
-    def load_nodes(self, nodes: list[Node]) -> int:
+    def load_nodes(self, nodes: list[Node], extra_props: dict | None = None) -> int:
         total = 0
         by_label: dict[str, list[dict]] = {}
         for n in nodes:
@@ -56,6 +59,8 @@ class Neo4jLoader:
             if label is None:
                 continue
             props = {k: v for k, v in n.to_json().items() if v is not None}
+            if extra_props:
+                props.update(extra_props)
             by_label.setdefault(label, []).append({"id": n.id, "props": props})
 
         with self._session() as session:
@@ -95,6 +100,65 @@ class Neo4jLoader:
                     session.run(cypher, batch=batch).consume()
                     total += len(batch)
         return total
+
+    def load_index_run(self, run) -> None:
+        """Persist an IndexRun plus Change records. Call after upserting nodes
+        and before deleting removed ones so TOUCHED can still MATCH symbols."""
+        run_props = {
+            "id": run.id,
+            "sha": run.sha,
+            "at": run.at,
+            "source": run.source,
+            "trigger_repo": run.trigger_repo,
+            "repo_shas": json.dumps(run.repo_shas),
+            "upserted": run.upserted,
+            "deleted": run.deleted,
+        }
+        changes = [
+            {
+                "id": f"{run.id}:{c.op}:{c.node_id}",
+                "op": c.op,
+                "node_id": c.node_id,
+                "kind": c.kind,
+                "name": c.name,
+                "repo": c.repo,
+                "path": c.path,
+                "owner": c.owner,
+                "signature": c.signature,
+            }
+            for c in run.changes
+        ]
+        with self._session() as session:
+            session.run(
+                "MERGE (r:IndexRun {id: $id}) SET r += $props",
+                id=run.id, props=run_props,
+            ).consume()
+            for batch in _chunks(changes, BATCH_SIZE):
+                session.run(
+                    "UNWIND $batch AS c "
+                    "MATCH (r:IndexRun {id: $rid}) "
+                    "MERGE (ch:Change {id: c.id}) SET ch += c "
+                    "MERGE (r)-[:RECORDED]->(ch)",
+                    batch=batch, rid=run.id,
+                ).consume()
+            upsert_ids = [c.node_id for c in run.changes if c.op == "upsert"]
+            for batch in _chunks(upsert_ids, BATCH_SIZE):
+                session.run(
+                    "UNWIND $batch AS nid "
+                    "MATCH (r:IndexRun {id: $rid}) "
+                    "MATCH (s {id: nid}) "
+                    "MERGE (r)-[:TOUCHED {op: 'upsert'}]->(s)",
+                    batch=batch, rid=run.id,
+                ).consume()
+
+    def list_index_runs(self, limit: int = 20) -> list[dict]:
+        return self.run_query(
+            "MATCH (r:IndexRun) RETURN r.id AS id, r.sha AS sha, r.at AS at, "
+            "r.source AS source, r.trigger_repo AS trigger_repo, "
+            "r.upserted AS upserted, r.deleted AS deleted "
+            "ORDER BY r.at DESC LIMIT $limit",
+            limit=limit,
+        )
 
     # ---- incremental deletes ----------------------------------------------
 

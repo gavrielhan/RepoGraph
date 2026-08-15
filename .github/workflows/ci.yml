@@ -50,11 +50,14 @@ jobs:
           use-existing-checkout: "true"
           neo4j-uri: bolt://localhost:7687
           neo4j-password: testpassword
+          ir-dir: .repograph
 
       - name: Blast-radius smoke query
         env:
           REPOGRAPH_NEO4J_URI: bolt://localhost:7687
           REPOGRAPH_NEO4J_PASSWORD: testpassword
+          REPOGRAPH_IR_DIR: .repograph
         run: |
           pip install --quiet .
           repograph query --changed 'corelib::corelib/utils.py::load_config'
+          repograph runs --limit 3

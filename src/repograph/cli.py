@@ -4,6 +4,7 @@ Commands:
   activate  interactive: auth -> selection -> clone -> pipeline -> load
   run       headless (CI): token + repo list from env/config
     query     blast-radius of the current branch, a PR, a diff, or a symbol
+  runs      list index runs (what each graph build changed)
   reindex   re-run parse/resolve/load (incremental unless --full)
 
 Config resolution order: CLI flags > repograph.yaml in cwd > env vars.
@@ -166,7 +167,8 @@ def _build(cfg: Config, specs: list[RepoSpec], token: str):
 @click.option("--committed", is_flag=True, help="With --branch, ignore uncommitted working-tree changes.")
 @click.option("--repo", "diff_repo", default=None, help="Graph repo name (or owner/name) to restrict the diff to.")
 @click.option("--max-depth", default=10, show_default=True, help="Maximum traversal depth.")
-def query(changed_id, diff_ref, branch_ref, pr_spec, base_ref, committed, diff_repo, max_depth, **kwargs):
+@click.option("--offline", is_flag=True, help="Query the JSONL IR instead of Neo4j (graph files in git).")
+def query(changed_id, diff_ref, branch_ref, pr_spec, base_ref, committed, diff_repo, max_depth, offline, **kwargs):
     """Blast radius of a symbol, the current branch, or a GitHub PR.
 
     With no flags, diffs the current branch (plus uncommitted changes) against
@@ -185,19 +187,29 @@ def query(changed_id, diff_ref, branch_ref, pr_spec, base_ref, committed, diff_r
         click.echo("No indexed symbols in this change; nothing to report.")
         return
 
+    from repograph.query.blast_radius import format_results
+
+    seen: dict[str, dict] = {}
+    for cid in changed_ids:
+        for r in _blast_one(cfg, cid, max_depth, offline):
+            prev = seen.get(r["id"])
+            if prev is None or (r.get("confidence") or 0) > (prev.get("confidence") or 0):
+                seen[r["id"]] = r
+    results = sorted(seen.values(), key=lambda r: (r.get("distance", 0), -(r.get("confidence") or 0)))
+    click.echo(format_results(results, header, changed_ids=changed_ids))
+
+
+def _blast_one(cfg: Config, cid: str, max_depth: int, offline: bool) -> list[dict]:
+    from repograph.query.blast_radius import blast_radius, blast_radius_ir
+
+    if offline or not cfg.neo4j.password:
+        nodes, edges = load_ir(cfg)
+        return blast_radius_ir(nodes, edges, cid, max_depth)
     from repograph.load.neo4j_loader import Neo4jLoader
-    from repograph.query.blast_radius import blast_radius, format_results
 
     loader = Neo4jLoader(cfg.neo4j.uri, cfg.neo4j.user, cfg.neo4j.password, cfg.neo4j.database)
     try:
-        seen: dict[str, dict] = {}
-        for cid in changed_ids:
-            for r in blast_radius(loader, cid, max_depth):
-                prev = seen.get(r["id"])
-                if prev is None or (r.get("confidence") or 0) > (prev.get("confidence") or 0):
-                    seen[r["id"]] = r
-        results = sorted(seen.values(), key=lambda r: (r.get("distance", 0), -(r.get("confidence") or 0)))
-        click.echo(format_results(results, header, changed_ids=changed_ids))
+        return blast_radius(loader, cid, max_depth)
     finally:
         loader.close()
 
@@ -349,6 +361,25 @@ def reindex(full, **kwargs):
     click.echo(f"Reindexing {len(roots)} repo(s) ({'full' if full else 'incremental'})…")
     stats = run_pipeline(cfg, roots, path_globs=path_globs, full=full)
     click.echo(f"Done: {stats.summary()}")
+
+
+@main.command()
+@_common_options
+@click.option("--sha", default=None, help="Show changes recorded for this git SHA or run id.")
+@click.option("--limit", default=20, show_default=True, help="How many recent runs to list.")
+def runs(sha, limit, **kwargs):
+    """List index runs (what changed in each graph build)."""
+    cfg = _cfg(kwargs)
+    from repograph.load.history import format_run_changes, format_runs, load_runs
+
+    recorded = load_runs(cfg.ir_dir)
+    if sha:
+        matches = [r for r in recorded if r.sha.startswith(sha) or r.id.startswith(sha)]
+        if not matches:
+            raise click.ClickException(f"no index run matching {sha!r} in {cfg.ir_dir / 'runs.jsonl'}")
+        click.echo(format_run_changes(matches[-1]))
+        return
+    click.echo(format_runs(recorded, limit=limit))
 
 
 if __name__ == "__main__":

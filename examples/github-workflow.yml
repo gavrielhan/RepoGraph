@@ -1,14 +1,16 @@
-# Example: index other GitHub repos into a network-reachable Neo4j
-# (Aura or self-hosted) and comment blast radius on pull requests.
+# Copy into .github/workflows/ of each repo you want indexed.
 #
-# Copy into .github/workflows/ in a consuming repo. This file is not
-# registered as a workflow here so placeholder org names cannot fail CI.
+# On every push to main this:
+#   1. Rebuilds the graph IR (nodes, edges, index-run history)
+#   2. Commits it to the `graph` branch (the graph sitting in GitHub)
+#   3. Loads Neo4j if NEO4J_URI / NEO4J_PASSWORD secrets are set
 #
-# Required secrets: NEO4J_URI, NEO4J_PASSWORD
-# Optional: REPOGRAPH_CLONE_TOKEN (PAT with contents:read on each indexed repo)
+# GitHub cannot host Neo4j. The JSONL files on the `graph` branch *are*
+# the portable graph: clone that branch and `repograph query --offline`.
 #
-# Minimum token permissions: contents:read to clone; pull-requests:write
-# only for the PR comment step.
+# Cross-repo: put this workflow in a dedicated data repo and list every
+# service under `repos:`, with a PAT that can clone them (contents:read).
+# Each service can also `repository_dispatch` that data repo on push.
 
 name: repograph
 
@@ -16,12 +18,15 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
 
 jobs:
   build-graph:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -30,15 +35,30 @@ jobs:
         uses: gavrielhan/RepoGraph/action@main
         with:
           repos: |
-            your-org/service-a
-            your-org/service-b
+            ${{ github.repository }}
+          use-existing-checkout: "true"
+          clone-dir: .
+          ir-dir: graph
           neo4j-uri: ${{ secrets.NEO4J_URI }}
           neo4j-password: ${{ secrets.NEO4J_PASSWORD }}
           github-token: ${{ secrets.REPOGRAPH_CLONE_TOKEN || github.token }}
 
+      - name: Publish graph branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add graph
+          if git diff --cached --quiet; then
+            echo "No graph changes."
+            exit 0
+          fi
+          git commit -m "index ${GITHUB_SHA}"
+          git fetch origin graph || true
+          git checkout -B graph
+          git push origin graph
+
   blast-radius-comment:
     if: github.event_name == 'pull_request'
-    needs: build-graph
     runs-on: ubuntu-latest
     permissions:
       contents: read

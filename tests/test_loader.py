@@ -54,8 +54,8 @@ def test_constraints_per_label():
     make_loader(log).ensure_constraints()
     cyphers = [c for c, _ in log]
     assert any("FOR (s:Symbol) REQUIRE s.id IS UNIQUE" in c for c in cyphers)
-    assert any("FOR (s:Module) REQUIRE s.id IS UNIQUE" in c for c in cyphers)
-    assert all("IF NOT EXISTS" in c for c in cyphers)
+    assert any("FOR (s:IndexRun) REQUIRE s.id IS UNIQUE" in c for c in cyphers)
+    assert any("FOR (s:Change) REQUIRE s.id IS UNIQUE" in c for c in cyphers)
 
 
 def test_nodes_merged_by_label():
@@ -106,6 +106,23 @@ def test_batching():
     loader.load_nodes(nodes)
     batches = [len(p["batch"]) for _, p in log]
     assert batches == [5000, 5000, 2000]
+
+
+def test_load_index_run():
+    from repograph.load.history import Change, IndexRun
+
+    log = []
+    loader = make_loader(log)
+    run = IndexRun(
+        id="r1", sha="abc", at="2026-01-01T00:00:00Z", source="ci",
+        changes=[Change(op="upsert", node_id="r::a.py::f", kind="function", name="f")],
+        upserted=1,
+    )
+    loader.load_index_run(run)
+    cyphers = [c for c, _ in log]
+    assert any("MERGE (r:IndexRun {id: $id})" in c for c in cyphers)
+    assert any("MERGE (ch:Change {id: c.id})" in c for c in cyphers)
+    assert any("MERGE (r)-[:TOUCHED {op: 'upsert'}]->(s)" in c for c in cyphers)
 
 
 def test_delete_nodes_detach():

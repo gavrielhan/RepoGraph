@@ -11,6 +11,7 @@ def test_query_and_blast_are_aliases():
     assert b.exit_code == 0
     assert "--pr" in q.output
     assert "--branch" in q.output
+    assert "--offline" in q.output
     assert "--pr" in b.output
 
 
