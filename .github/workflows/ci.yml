@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install --quiet -e ".[dev]"
+      - name: Test
+        run: pytest -q
+
+  build-graph:
+    runs-on: ubuntu-latest
+    services:
+      neo4j:
+        image: neo4j:5
+        env:
+          NEO4J_AUTH: neo4j/testpassword
+        ports:
+          - 7687:7687
+          - 7474:7474
+        options: >-
+          --health-cmd "wget -q --spider http://localhost:7474 || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build graph
+        uses: ./action
+        with:
+          # Graph the in-repo fixtures; no clone, no Aura secrets required.
+          repos: |
+            axiom/axiom_core
+            axiom/axiom_tox_poc
+          clone-dir: tests/fixtures
+          use-existing-checkout: "true"
+          neo4j-uri: bolt://localhost:7687
+          neo4j-password: testpassword
+
+      - name: Blast-radius smoke query
+        env:
+          REPOGRAPH_NEO4J_URI: bolt://localhost:7687
+          REPOGRAPH_NEO4J_PASSWORD: testpassword
+        run: |
+          pip install --quiet .
+          repograph query --changed 'axiom_core::axiom_core/utils.py::load_config'

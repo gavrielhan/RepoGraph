@@ -259,12 +259,14 @@ generic names (`data`, `tmp`, …) are dropped to control false positives.
 
 ## GitHub Action
 
-A composite action lives in `action/`; a full example workflow (graph
-rebuild on push + blast-radius PR comment) is in
-`.github/workflows/repograph.yml`.
+This repo's CI (`.github/workflows/ci.yml`) runs pytest and builds the
+fixture graph into a Neo4j service container — no Aura secrets required.
+
+A composite action lives in `action/`. For indexing *other* GitHub repos
+into Aura or a self-hosted Neo4j, copy `examples/github-workflow.yml`.
 
 ```yaml
-- uses: your-org/repograph/action@main
+- uses: gavrielhan/RepoGraph/action@main
   with:
     repos: |
       your-org/service-a
