@@ -38,6 +38,7 @@ def test_cli_flags_override_yaml(tmp_path):
 
 
 def test_headless_detection(tmp_path, monkeypatch):
+    monkeypatch.delenv("CI", raising=False)
     cfg = load_config(cwd=tmp_path)
     assert cfg.is_headless(headless_flag=True)
     assert not cfg.is_headless()
