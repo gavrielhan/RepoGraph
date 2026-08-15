@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.repograph/
+repos/
+.pytest_cache/
+repograph.yaml

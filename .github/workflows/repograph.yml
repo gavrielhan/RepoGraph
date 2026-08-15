@@ -1,0 +1,76 @@
+# Example workflow: rebuild the knowledge graph on push, and on pull
+# requests run a blast-radius query over the PR diff and post the affected
+# owners as a comment.
+#
+# Minimum token permissions: contents:read to clone the indexed repos,
+# pull-requests:write only for the PR comment step.
+
+name: repograph
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-graph:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build graph
+        uses: ./action
+        with:
+          # Repo list can come from repograph.yaml instead; inputs override it.
+          repos: |
+            your-org/service-a
+            your-org/service-b
+          neo4j-uri: ${{ secrets.NEO4J_URI }}
+          neo4j-password: ${{ secrets.NEO4J_PASSWORD }}
+          # Cloning private repos beyond this one needs a PAT with contents:read:
+          github-token: ${{ secrets.REPOGRAPH_CLONE_TOKEN || github.token }}
+
+  blast-radius-comment:
+    if: github.event_name == 'pull_request'
+    needs: build-graph
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install repograph
+        run: pip install --quiet .
+
+      - name: Blast radius for PR diff
+        env:
+          REPOGRAPH_NEO4J_URI: ${{ secrets.NEO4J_URI }}
+          REPOGRAPH_NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
+        run: |
+          repograph query --diff "origin/${{ github.base_ref }}" \
+            > blast_radius.txt || true
+          cat blast_radius.txt
+
+      - name: Comment on PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -s blast_radius.txt ]; then
+            {
+              echo '### repograph blast radius'
+              echo '```'
+              cat blast_radius.txt
+              echo '```'
+            } > comment.md
+            gh pr comment ${{ github.event.pull_request.number }} --body-file comment.md
+          fi

@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "repograph"
+version = "0.1.0"
+description = "Cross-repository code knowledge graph in Neo4j: parse, resolve, load, and run blast-radius queries."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "click>=8.1",
+    "pyyaml>=6.0",
+    "requests>=2.31",
+    "tree-sitter>=0.25",
+    "tree-sitter-language-pack>=0.13",
+    "neo4j>=5.20",
+    "keyring>=25.0",
+    "pathspec>=0.12",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+repograph = "repograph.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/repograph"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

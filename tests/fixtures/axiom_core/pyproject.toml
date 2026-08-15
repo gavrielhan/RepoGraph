@@ -1,0 +1,6 @@
+[project]
+name = "axiom-core"
+version = "1.0.0"
+
+[tool.setuptools]
+packages = ["axiom_core"]

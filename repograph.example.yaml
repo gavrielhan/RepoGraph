@@ -1,0 +1,45 @@
+# repograph configuration.
+# Resolution order: CLI flags > this file (in cwd) > environment variables.
+# Copy to repograph.yaml and edit. Do not commit secrets; prefer env vars
+# (REPOGRAPH_NEO4J_PASSWORD, GITHUB_TOKEN) for anything sensitive.
+
+neo4j:
+  uri: bolt://localhost:7687        # or neo4j+s://xxxx.databases.neo4j.io (Aura)
+  user: neo4j
+  password: ""                      # prefer REPOGRAPH_NEO4J_PASSWORD
+  database: neo4j
+
+github:
+  # Device flow (default): only a client id is needed; create an OAuth app at
+  # https://github.com/settings/applications/new and enable "Device flow".
+  client_id: ""
+  # Localhost web flow (optional): register your OWN OAuth app with callback
+  # http://127.0.0.1/callback and set both values; then set auth_flow: web.
+  client_secret: ""                 # prefer REPOGRAPH_GITHUB_CLIENT_SECRET
+  auth_flow: device                 # device | web
+
+clone_dir: repos                    # where checkouts live
+ir_dir: .repograph                  # nodes.jsonl / edges.jsonl / snapshots
+
+# Language allowlist; empty means every supported language
+# (python, sql, javascript, typescript, java, scala, go, bash).
+languages: []
+
+# Repo list for headless runs (`repograph run`). Interactive `activate`
+# replaces this with the browser selection.
+repos:
+  - your-org/service-a
+  - full_name: your-org/big-monorepo
+    paths:                          # optional globs to limit parsing scope
+      - "services/pricing/**"
+      - "libs/common/**"
+
+# Owner resolution: CODEOWNERS files are used first; this registry is the
+# fallback, keyed by repo name or repo/path-prefix.
+owner_source: codeowners
+owner_registry:
+  service-a: "@your-org/platform"
+  big-monorepo/services/pricing: "@your-org/pricing"
+
+# Set true in GitHub Actions when the workflow already checked the repos out.
+use_existing_checkout: false
