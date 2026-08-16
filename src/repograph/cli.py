@@ -13,6 +13,7 @@ Interactive vs headless is auto-detected (CI=true or --headless).
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -180,7 +181,11 @@ def _build(cfg: Config, specs: list[RepoSpec], token: str):
 @click.option("--repo", "diff_repo", default=None, help="Graph repo name (or owner/name) to restrict the diff to.")
 @click.option("--max-depth", default=10, show_default=True, help="Maximum traversal depth.")
 @click.option("--offline", is_flag=True, help="Query the JSONL IR instead of Neo4j (graph files in git).")
-def query(changed_id, diff_ref, branch_ref, pr_spec, base_ref, committed, diff_repo, max_depth, offline, **kwargs):
+@click.option("--json", "json_output", is_flag=True, help="Emit structured JSON for agents and CI.")
+def query(
+    changed_id, diff_ref, branch_ref, pr_spec, base_ref, committed, diff_repo,
+    max_depth, offline, json_output, **kwargs
+):
     """Blast radius of a symbol, the current branch, or a GitHub PR.
 
     With no flags, diffs the current branch (plus uncommitted changes) against
@@ -194,13 +199,24 @@ def query(changed_id, diff_ref, branch_ref, pr_spec, base_ref, committed, diff_r
     if not any(sources):
         branch_ref = "HEAD"  # default: current branch / possible PR
 
-    header, changed_ids = _resolve_changed(cfg, changed_id, diff_ref, branch_ref, pr_spec, base_ref, committed, diff_repo)
+    header, changed_ids = _resolve_changed(
+        cfg, changed_id, diff_ref, branch_ref, pr_spec, base_ref, committed, diff_repo
+    )
     from repograph.load.history import format_freshness, freshness
 
     fresh = freshness(cfg.ir_dir)
     if not changed_ids:
-        click.echo(format_freshness(fresh))
-        click.echo("No indexed symbols in this change; nothing to report.")
+        if json_output:
+            click.echo(json.dumps({
+                "freshness": fresh,
+                "change": header,
+                "changed_ids": [],
+                "count": 0,
+                "results": [],
+            }, sort_keys=True))
+        else:
+            click.echo(format_freshness(fresh))
+            click.echo("No indexed symbols in this change; nothing to report.")
         return
 
     from repograph.query.blast_radius import format_results
@@ -212,8 +228,17 @@ def query(changed_id, diff_ref, branch_ref, pr_spec, base_ref, committed, diff_r
             if prev is None or (r.get("confidence") or 0) > (prev.get("confidence") or 0):
                 seen[r["id"]] = r
     results = sorted(seen.values(), key=lambda r: (r.get("distance", 0), -(r.get("confidence") or 0)))
-    click.echo(format_freshness(fresh))
-    click.echo(format_results(results, header, changed_ids=changed_ids))
+    if json_output:
+        click.echo(json.dumps({
+            "freshness": fresh,
+            "change": header,
+            "changed_ids": changed_ids,
+            "count": len(results),
+            "results": results,
+        }, sort_keys=True))
+    else:
+        click.echo(format_freshness(fresh))
+        click.echo(format_results(results, header, changed_ids=changed_ids))
 
 
 def _blast_one(cfg: Config, cid: str, max_depth: int, offline: bool) -> list[dict]:

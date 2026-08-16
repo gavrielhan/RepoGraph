@@ -140,6 +140,14 @@ Symbol IDs use `repo::path::qualified_name`:
 repograph query --changed 'service::src/jobs.py::run_job'
 ```
 
+For agents, CI, and dashboards, use structured output:
+
+```bash
+repograph query --offline --json
+```
+
+Query JSON contains `freshness`, `changed_ids`, and `results`.
+
 ### Query graph files without Neo4j
 
 ```bash
