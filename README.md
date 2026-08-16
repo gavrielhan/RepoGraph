@@ -213,6 +213,27 @@ For a real cross-repository graph, use one dedicated graph repository:
 
 The scheduled rebuild in the example is a safety net for missed dispatches.
 
+## Connect a coding agent with MCP
+
+RepoGraph ships a local stdio MCP server with `find_symbols`, `blast_radius`,
+`graph_freshness`, and `refresh` tools:
+
+```json
+{
+  "mcpServers": {
+    "repograph": {
+      "command": "repograph-mcp",
+      "args": ["--project-root", "/absolute/path/to/your/graph-project"]
+    }
+  }
+}
+```
+
+The server reloads `nodes.jsonl` and `edges.jsonl` automatically when they
+change. `refresh` forces a cache reload but does not fetch or reindex repos.
+Tool results include freshness metadata, and the blast-radius tool explicitly
+describes the graph as ranked static-analysis evidence rather than a hard gate.
+
 ## Headless use
 
 CI does not use OAuth or a browser. Define repositories in
