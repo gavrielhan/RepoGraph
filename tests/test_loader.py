@@ -56,6 +56,7 @@ def test_constraints_per_label():
     assert any("FOR (s:Symbol) REQUIRE s.id IS UNIQUE" in c for c in cyphers)
     assert any("FOR (s:IndexRun) REQUIRE s.id IS UNIQUE" in c for c in cyphers)
     assert any("FOR (s:Change) REQUIRE s.id IS UNIQUE" in c for c in cyphers)
+    assert any("FOR (s:GraphState) REQUIRE s.id IS UNIQUE" in c for c in cyphers)
 
 
 def test_nodes_merged_by_label():
@@ -129,3 +130,24 @@ def test_delete_nodes_detach():
     log = []
     make_loader(log).delete_nodes(["r::a.py::f"])
     assert "DETACH DELETE" in log[0][0]
+
+
+def test_graph_state_stamps_completed_run():
+    log = []
+    loader = make_loader(log)
+    assert loader.graph_state_run_id() is None
+    loader.set_graph_state("run-2")
+    assert any(
+        "MERGE (s:GraphState {id: 'current'}) SET s.run_id = $run_id" in cypher
+        and params["run_id"] == "run-2"
+        for cypher, params in log
+    )
+
+
+def test_full_load_can_clear_only_current_graph_entities():
+    log = []
+    make_loader(log).clear_code_graph()
+    assert (
+        "MATCH (n) WHERE n:Repo OR n:Module OR n:Symbol OR n:Dataset DETACH DELETE n"
+        in log[0][0]
+    )

@@ -35,14 +35,16 @@ class PipelineStats:
     deleted_edges: int = 0
     unchanged_nodes: int = 0
     run_id: str = ""
+    consistency_recovery: bool = False
 
     def summary(self) -> str:
         run = f" run={self.run_id}" if self.run_id else ""
+        recovery = " WARNING neo4j-snapshot-mismatch=full-load" if self.consistency_recovery else ""
         return (
             f"nodes={self.nodes} pending={self.pending_edges} resolved={self.resolved_edges} | "
             f"loaded {self.loaded_nodes} nodes / {self.loaded_edges} edges, "
             f"deleted {self.deleted_nodes} nodes / {self.deleted_edges} edges, "
-            f"unchanged {self.unchanged_nodes}{run}"
+            f"unchanged {self.unchanged_nodes}{run}{recovery}"
         )
 
 
@@ -90,29 +92,44 @@ def run_pipeline(
     stats.resolved_edges = len(edges)
 
     previous = None if full else load_latest_snapshot(cfg.ir_dir)
-    diff = diff_snapshot(previous, nodes, edges)
-    stats.unchanged_nodes = diff.unchanged
-    run = build_index_run(diff, nodes, repo_roots)
-    append_run(cfg.ir_dir, run)
-    stats.run_id = run.id
-
-    if skip_load or not cfg.neo4j.password:
-        save_snapshot(cfg.ir_dir, build_snapshot(nodes, edges))
-        return stats
-
-    loader = Neo4jLoader(
-        cfg.neo4j.uri, cfg.neo4j.user, cfg.neo4j.password, cfg.neo4j.database
-    )
+    loader = None
     try:
-        loader.ensure_constraints()
+        if not skip_load and cfg.neo4j.password:
+            loader = Neo4jLoader(
+                cfg.neo4j.uri, cfg.neo4j.user, cfg.neo4j.password, cfg.neo4j.database
+            )
+            loader.ensure_constraints()
+            database_run_id = loader.graph_state_run_id()
+            if previous:
+                snapshot_run_id = previous.get("run_id")
+                if not snapshot_run_id or database_run_id != snapshot_run_id:
+                    previous = None
+                    stats.consistency_recovery = True
+            elif database_run_id and not full:
+                stats.consistency_recovery = True
+            if full or stats.consistency_recovery:
+                loader.clear_code_graph()
+
+        diff = diff_snapshot(previous, nodes, edges)
+        stats.unchanged_nodes = diff.unchanged
+        run = build_index_run(diff, nodes, repo_roots)
+        stats.run_id = run.id
+
+        if loader is None:
+            append_run(cfg.ir_dir, run)
+            save_snapshot(cfg.ir_dir, build_snapshot(nodes, edges, run_id=run.id))
+            return stats
+
         extra = {"git_sha": run.sha, "indexed_at": run.at}
         stats.loaded_nodes = loader.load_nodes(diff.upsert_nodes, extra_props=extra)
         stats.loaded_edges = loader.load_edges(edges, nodes)
         loader.load_index_run(run)
         stats.deleted_edges = loader.delete_edges(diff.delete_edge_keys)
         stats.deleted_nodes = loader.delete_nodes(diff.delete_node_ids)
+        loader.set_graph_state(run.id)
+        append_run(cfg.ir_dir, run)
+        save_snapshot(cfg.ir_dir, build_snapshot(nodes, edges, run_id=run.id))
     finally:
-        loader.close()
-
-    save_snapshot(cfg.ir_dir, build_snapshot(nodes, edges))
+        if loader is not None:
+            loader.close()
     return stats

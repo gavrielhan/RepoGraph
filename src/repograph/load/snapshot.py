@@ -39,12 +39,15 @@ def edge_key(edge: Edge) -> str:
     return f"{edge.type}|{edge.src}|{edge.dst}"
 
 
-def build_snapshot(nodes: list[Node], edges: list[Edge]) -> dict:
-    return {
+def build_snapshot(nodes: list[Node], edges: list[Edge], run_id: str | None = None) -> dict:
+    snapshot = {
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "nodes": {n.id: node_hash(n) for n in nodes},
         "edges": sorted({edge_key(e) for e in edges}),
     }
+    if run_id:
+        snapshot["run_id"] = run_id
+    return snapshot
 
 
 def diff_snapshot(previous: dict | None, nodes: list[Node], edges: list[Edge]) -> SnapshotDiff:

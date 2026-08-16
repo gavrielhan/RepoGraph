@@ -22,7 +22,7 @@ KIND_LABEL = {
     "class": "Symbol",
 }
 LABELS = sorted(set(KIND_LABEL.values()))
-HISTORY_LABELS = ["IndexRun", "Change"]
+HISTORY_LABELS = ["IndexRun", "Change", "GraphState"]
 BATCH_SIZE = 5000
 
 
@@ -159,6 +159,27 @@ class Neo4jLoader:
             "ORDER BY r.at DESC LIMIT $limit",
             limit=limit,
         )
+
+    def graph_state_run_id(self) -> str | None:
+        rows = self.run_query(
+            "MATCH (s:GraphState {id: 'current'}) RETURN s.run_id AS run_id"
+        )
+        return rows[0]["run_id"] if rows else None
+
+    def set_graph_state(self, run_id: str) -> None:
+        with self._session() as session:
+            session.run(
+                "MERGE (s:GraphState {id: 'current'}) SET s.run_id = $run_id",
+                run_id=run_id,
+            ).consume()
+
+    def clear_code_graph(self) -> None:
+        """Remove current graph entities while retaining index-run history."""
+        with self._session() as session:
+            session.run(
+                "MATCH (n) WHERE n:Repo OR n:Module OR n:Symbol OR n:Dataset "
+                "DETACH DELETE n"
+            ).consume()
 
     # ---- incremental deletes ----------------------------------------------
 
