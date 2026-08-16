@@ -50,6 +50,7 @@ class IndexRun:
     repo_shas: dict[str, str] = field(default_factory=dict)
     upserted: int = 0
     deleted: int = 0
+    fetch_status: dict[str, dict] = field(default_factory=dict)
     changes: list[Change] = field(default_factory=list)
 
     def to_json(self) -> dict:
@@ -88,6 +89,7 @@ def build_index_run(
     diff: SnapshotDiff,
     nodes: list[Node],
     repo_roots: dict[str, Path],
+    fetch_status: dict[str, dict] | None = None,
 ) -> IndexRun:
     by_id = {n.id: n for n in nodes}
     repo_shas = collect_repo_shas(repo_roots)
@@ -132,6 +134,7 @@ def build_index_run(
         repo_shas=repo_shas,
         upserted=len(diff.upsert_nodes),
         deleted=len(diff.delete_node_ids),
+        fetch_status=fetch_status or {},
         changes=changes,
     )
 

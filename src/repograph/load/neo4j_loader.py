@@ -111,6 +111,7 @@ class Neo4jLoader:
             "source": run.source,
             "trigger_repo": run.trigger_repo,
             "repo_shas": json.dumps(run.repo_shas),
+            "fetch_status": json.dumps(run.fetch_status),
             "upserted": run.upserted,
             "deleted": run.deleted,
         }

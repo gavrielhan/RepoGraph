@@ -143,12 +143,24 @@ def _build(cfg: Config, specs: list[RepoSpec], token: str):
     from repograph.fetch import CloneError
 
     try:
-        roots = ensure_repos(cfg, specs, token)
+        fetched = ensure_repos(cfg, specs, token)
     except CloneError as e:
         raise click.ClickException(str(e))
     path_globs = {s.name: s.paths for s in specs if s.paths}
-    click.echo(f"Parsing {len(roots)} repo(s)…")
-    stats = run_pipeline(cfg, roots, path_globs=path_globs)
+    for repo, status in fetched.statuses.items():
+        if status.get("status") == "failed":
+            click.echo(
+                f"WARNING: fetch failed for {repo}; indexing stale checkout "
+                f"{status.get('sha') or '(unknown sha)'}: {status.get('reason')}",
+                err=True,
+            )
+    click.echo(f"Parsing {len(fetched.roots)} repo(s)…")
+    stats = run_pipeline(
+        cfg,
+        fetched.roots,
+        path_globs=path_globs,
+        fetch_status=fetched.statuses,
+    )
     click.echo(f"Done: {stats.summary()}")
     click.echo("Try: repograph query --changed '<repo>::<path>::<symbol>'")
 
@@ -365,20 +377,38 @@ def reindex(full, no_fetch, **kwargs):
 
     if no_fetch:
         roots = existing
+        fetch_status = {
+            repo: {"status": "skipped", "reason": "--no-fetch"}
+            for repo in roots
+        }
     else:
         from repograph.auth.github import cached_token
 
         specs = cfg.repos or [RepoSpec(full_name=name) for name in existing]
         cfg.use_existing_checkout = False
-        roots = ensure_repos(
+        fetched = ensure_repos(
             cfg,
             specs,
             cfg.github.token or cached_token() or "",
         )
+        roots, fetch_status = fetched.roots, fetched.statuses
+        for repo, status in fetch_status.items():
+            if status.get("status") == "failed":
+                click.echo(
+                    f"WARNING: fetch failed for {repo}; indexing stale checkout "
+                    f"{status.get('sha') or '(unknown sha)'}: {status.get('reason')}",
+                    err=True,
+                )
 
     path_globs = {s.name: s.paths for s in cfg.repos if s.paths}
     click.echo(f"Reindexing {len(roots)} repo(s) ({'full' if full else 'incremental'})…")
-    stats = run_pipeline(cfg, roots, path_globs=path_globs, full=full)
+    stats = run_pipeline(
+        cfg,
+        roots,
+        path_globs=path_globs,
+        full=full,
+        fetch_status=fetch_status,
+    )
     click.echo(f"Done: {stats.summary()}")
 
 

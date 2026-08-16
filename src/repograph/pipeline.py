@@ -35,16 +35,22 @@ class PipelineStats:
     deleted_edges: int = 0
     unchanged_nodes: int = 0
     run_id: str = ""
+    fetch_status: dict[str, dict] | None = None
     consistency_recovery: bool = False
 
     def summary(self) -> str:
         run = f" run={self.run_id}" if self.run_id else ""
+        failed = sorted(
+            repo for repo, status in (self.fetch_status or {}).items()
+            if status.get("status") == "failed"
+        )
+        fetch = f" WARNING fetch-failed={','.join(failed)}" if failed else ""
         recovery = " WARNING neo4j-snapshot-mismatch=full-load" if self.consistency_recovery else ""
         return (
             f"nodes={self.nodes} pending={self.pending_edges} resolved={self.resolved_edges} | "
             f"loaded {self.loaded_nodes} nodes / {self.loaded_edges} edges, "
             f"deleted {self.deleted_nodes} nodes / {self.deleted_edges} edges, "
-            f"unchanged {self.unchanged_nodes}{run}{recovery}"
+            f"unchanged {self.unchanged_nodes}{run}{fetch}{recovery}"
         )
 
 
@@ -83,10 +89,12 @@ def run_pipeline(
     path_globs: dict[str, list[str]] | None = None,
     full: bool = False,
     skip_load: bool = False,
+    fetch_status: dict[str, dict] | None = None,
 ) -> PipelineStats:
     """Full pipeline. `full=False` loads incrementally against the last
     snapshot; `full=True` rewrites every node."""
     stats = PipelineStats()
+    stats.fetch_status = fetch_status or {}
     nodes, edges = build_ir(cfg, repo_roots, path_globs)
     stats.nodes = len(nodes)
     stats.resolved_edges = len(edges)
@@ -112,7 +120,7 @@ def run_pipeline(
 
         diff = diff_snapshot(previous, nodes, edges)
         stats.unchanged_nodes = diff.unchanged
-        run = build_index_run(diff, nodes, repo_roots)
+        run = build_index_run(diff, nodes, repo_roots, fetch_status=fetch_status)
         stats.run_id = run.id
 
         if loader is None:

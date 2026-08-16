@@ -103,8 +103,8 @@ configured, the same run is also loaded into Neo4j.
 
 Run these commands from a repository that has already been indexed.
 Every query starts with the indexed SHA, age, and repository count. RepoGraph
-warns when the graph is over seven days old; do not treat an empty result from
-a stale graph as proof that a change is safe.
+warns when the graph is over seven days old or a repository fetch failed; do
+not treat an empty result from a stale graph as proof that a change is safe.
 
 ### Current branch or possible PR
 

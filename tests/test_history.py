@@ -60,10 +60,11 @@ def test_freshness_reports_stale_index(tmp_path):
             at="2020-01-01T00:00:00Z",
             source="ci",
             repo_shas={"app": "abcdef"},
+            fetch_status={"app": {"status": "failed", "reason": "denied"}},
         ),
     )
     info = freshness(tmp_path)
     assert info["stale"]
     assert info["repo_count"] == 1
-    assert "older than" in info["warning"]
+    assert "fetch failed for app" in info["warning"]
     assert format_freshness(info).startswith("WARNING:")
