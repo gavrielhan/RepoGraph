@@ -71,4 +71,5 @@ runs:
           [ -n "$repo" ] && ARGS="$ARGS --repos $repo"
         done <<< "${{ inputs.repos }}"
         [ "${{ inputs.use-existing-checkout }}" = "true" ] && ARGS="$ARGS --use-existing-checkout"
+        [ "${{ inputs.full }}" = "true" ] && ARGS="$ARGS --full"
         repograph run --headless $ARGS

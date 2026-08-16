@@ -64,10 +64,10 @@ class _LoadedIR:
         return self.pair()[0]
 
 
-def _freshness(cfg: Config) -> dict:
+def _freshness(cfg: Config, *, offline: bool = False) -> dict:
     from repograph.load.history import freshness_for_config
 
-    return freshness_for_config(cfg)
+    return freshness_for_config(cfg, offline=offline)
 
 
 @click.group()
@@ -143,15 +143,20 @@ def activate(headless, scope, no_cache, **kwargs):
 @click.option("--headless", is_flag=True, default=True, help="Headless mode (default for run).")
 @click.option("--repos", multiple=True, help="owner/name (repeatable); overrides repograph.yaml.")
 @click.option("--use-existing-checkout", is_flag=True, help="Skip cloning; use directories already in clone-dir.")
-def run_cmd(headless, repos, use_existing_checkout, **kwargs):
+@click.option(
+    "--full",
+    is_flag=True,
+    help="Rewrite every node and prune Neo4j symbols that are no longer in the IR.",
+)
+def run_cmd(headless, repos, use_existing_checkout, full, **kwargs):
     """Headless pipeline for CI: token + repo list from env/config."""
     cfg = _cfg({**kwargs, "repos": list(repos)})
     if use_existing_checkout:
         cfg.use_existing_checkout = True
-    _run_headless(cfg)
+    _run_headless(cfg, full=full)
 
 
-def _run_headless(cfg: Config):
+def _run_headless(cfg: Config, full: bool = False):
     from repograph.auth import github as gh
 
     token = cfg.github.token
@@ -164,10 +169,10 @@ def _run_headless(cfg: Config):
         raise click.ClickException(
             "no repos configured: add a `repos:` list to repograph.yaml or pass --repos owner/name"
         )
-    _build(cfg, cfg.repos, token)
+    _build(cfg, cfg.repos, token, full=full)
 
 
-def _build(cfg: Config, specs: list[RepoSpec], token: str):
+def _build(cfg: Config, specs: list[RepoSpec], token: str, full: bool = False):
     from repograph.fetch import CloneError
 
     try:
@@ -187,6 +192,7 @@ def _build(cfg: Config, specs: list[RepoSpec], token: str):
         cfg,
         fetched.roots,
         path_globs=path_globs,
+        full=full,
         fetch_status=fetched.statuses,
     )
     click.echo(f"Done: {stats.summary()}")
@@ -233,7 +239,7 @@ def query(
         cfg, changed_id, diff_ref, branch_ref, pr_spec, base_ref, committed, diff_repo,
         ir=ir,
     )
-    fresh = _freshness(cfg)
+    fresh = _freshness(cfg, offline=offline)
     if not changed_ids:
         if json_output:
             click.echo(json.dumps({
@@ -445,7 +451,11 @@ def find(pattern, limit, json_output, **kwargs):
 
 @main.command()
 @_common_options
-@click.option("--full", is_flag=True, help="Rewrite every node instead of diffing against the last snapshot.")
+@click.option(
+    "--full",
+    is_flag=True,
+    help="Rewrite every node and prune Neo4j symbols that are no longer in the IR.",
+)
 @click.option("--no-fetch", is_flag=True, help="Reparse local checkouts without fetching origin.")
 def reindex(full, no_fetch, **kwargs):
     """Fetch repositories, then re-run parse -> resolve -> load."""

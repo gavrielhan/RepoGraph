@@ -179,6 +179,13 @@ class Neo4jLoader:
         rec["fetch_status"] = _maybe_json(rec.get("fetch_status"), {})
         return rec
 
+    def list_code_node_ids(self) -> list[str]:
+        rows = self.run_query(
+            "MATCH (n) WHERE n:Repo OR n:Module OR n:Symbol OR n:Dataset "
+            "RETURN n.id AS id"
+        )
+        return [row["id"] for row in rows if row.get("id")]
+
     def graph_state_run_id(self) -> str | None:
         rows = self.run_query(
             "MATCH (s:GraphState {id: 'current'}) RETURN s.run_id AS run_id"

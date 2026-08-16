@@ -257,22 +257,32 @@ def freshness(
     }
 
 
-def freshness_for_config(cfg, stale_after_days: int = 7) -> dict:
-    """Freshness from runs.jsonl, then Neo4j when the local history is absent."""
-    info = freshness(cfg.ir_dir, stale_after_days=stale_after_days)
-    if info.get("available") or not getattr(cfg, "neo4j", None) or not cfg.neo4j.password:
-        return info
-    from repograph.load.neo4j_loader import Neo4jLoader
+def freshness_for_config(cfg, stale_after_days: int = 7, *, offline: bool = False) -> dict:
+    """Freshness from runs.jsonl, then Neo4j when local history is absent.
 
-    loader = Neo4jLoader(cfg.neo4j.uri, cfg.neo4j.user, cfg.neo4j.password, cfg.neo4j.database)
+    ``offline=True`` never opens a Neo4j connection. Neo4j lookup failures
+    stay a freshness warning rather than a driver traceback.
+    """
+    info = freshness(cfg.ir_dir, stale_after_days=stale_after_days)
+    if info.get("available") or offline or not getattr(cfg, "neo4j", None) or not cfg.neo4j.password:
+        return info
     try:
-        return freshness(
-            cfg.ir_dir,
-            stale_after_days=stale_after_days,
-            neo4j_meta=loader.latest_run_meta(),
-        )
-    finally:
-        loader.close()
+        from repograph.load.neo4j_loader import Neo4jLoader
+
+        loader = Neo4jLoader(cfg.neo4j.uri, cfg.neo4j.user, cfg.neo4j.password, cfg.neo4j.database)
+        try:
+            return freshness(
+                cfg.ir_dir,
+                stale_after_days=stale_after_days,
+                neo4j_meta=loader.latest_run_meta(),
+            )
+        finally:
+            loader.close()
+    except Exception as exc:
+        warning = f"Neo4j freshness lookup failed: {exc}"
+        if info.get("warning"):
+            warning = f"{info['warning']}; {warning}"
+        return {**info, "warning": warning}
 
 
 def format_freshness(info: dict) -> str:
@@ -337,22 +347,35 @@ def _format_age(seconds: int) -> str:
 
 
 def _last_jsonl_record(path: Path) -> dict | None:
-    if not path.is_file() or path.stat().st_size == 0:
+    """Return the last JSON object in a JSONL file, regardless of record size."""
+    if not path.is_file():
+        return None
+    size = path.stat().st_size
+    if size == 0:
         return None
     with path.open("rb") as f:
-        f.seek(0, os.SEEK_END)
-        size = f.tell()
-        chunk = min(size, 65536)
-        f.seek(size - chunk)
-        data = f.read().decode("utf-8", errors="replace")
-    lines = [ln for ln in data.splitlines() if ln.strip()]
-    if not lines:
-        return None
-    for candidate in reversed(lines):
-        try:
-            rec = json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(rec, dict):
-            return rec
+        end = size
+        f.seek(size - 1)
+        if f.read(1) == b"\n":
+            end -= 1
+            if end == 0:
+                return None
+        pos = end
+        block = 65536
+        while pos > 0:
+            start = max(0, pos - block)
+            f.seek(start)
+            chunk = f.read(pos - start)
+            nl = chunk.rfind(b"\n")
+            if nl != -1 or start == 0:
+                line_start = start if nl == -1 else start + nl + 1
+                f.seek(line_start)
+                raw = f.read(end - line_start)
+                try:
+                    rec = json.loads(raw.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    return None
+                return rec if isinstance(rec, dict) else None
+            pos = start
+            block = min(block * 2, pos)
     return None

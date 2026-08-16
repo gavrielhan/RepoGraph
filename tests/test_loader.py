@@ -144,6 +144,13 @@ def test_graph_state_stamps_completed_run():
     )
 
 
+def test_list_code_node_ids_query():
+    log = []
+    ids = make_loader(log).list_code_node_ids()
+    assert ids == []
+    assert "n:Repo OR n:Module OR n:Symbol OR n:Dataset" in log[0][0]
+
+
 def test_full_load_can_clear_only_current_graph_entities():
     log = []
     make_loader(log).clear_code_graph()

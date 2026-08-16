@@ -173,10 +173,17 @@ repograph runs             # recent index runs
 repograph runs --sha abc123
 ```
 
-`reindex` fetches with `git merge --ff-only`. It never `reset --hard`, so
-uncommitted work and feature branches are left alone. Dirty or diverged
-checkouts are indexed as they are, with a warning. Missing configured
-checkouts are skipped rather than cloned.
+`activate` and `repograph run` own the clone directory: a clean checkout
+may `git reset --hard FETCH_HEAD` so a `--depth 1` clone can actually
+advance. `reindex` may point at real working trees, so it never resets.
+It fast-forwards with `git merge --ff-only`, and `git fetch --unshallow`
+if a shallow history has no merge base. Dirty trees are left untouched
+in both modes. Missing configured checkouts are skipped rather than cloned.
+
+`reindex --full` / `run --full` rewrite every node and delete Neo4j
+Repo/Module/Symbol/Dataset ids that are no longer in the IR. That is
+the repair for an over-populated graph; it does not `DETACH DELETE` the
+whole code graph, so `(:IndexRun)-[:TOUCHED]->(:Symbol)` history stays.
 
 Every build appends an index run containing the Git SHA, timestamp, and
 upserted/deleted nodes to `runs.jsonl`. With Neo4j enabled, it also creates:

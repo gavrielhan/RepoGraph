@@ -76,7 +76,9 @@ def test_find_returns_symbol_ids(tmp_path):
 
 def test_query_rejects_unknown_guessed_symbol_id(tmp_path):
     ir_dir = tmp_path / "graph"
-    write_jsonl(ir_dir / "nodes.jsonl", [])
+    write_jsonl(ir_dir / "nodes.jsonl", [
+        Node(id="app::jobs.py::run_job", kind="function", name="run_job", repo="app"),
+    ])
     write_jsonl(ir_dir / "edges.jsonl", [])
     result = CliRunner().invoke(main, [
         "query", "--offline", "--ir-dir", str(ir_dir),
@@ -86,12 +88,43 @@ def test_query_rejects_unknown_guessed_symbol_id(tmp_path):
     assert "repograph find" in result.output
 
 
+def test_empty_nodes_jsonl_is_an_error(tmp_path):
+    ir_dir = tmp_path / "graph"
+    ir_dir.mkdir()
+    (ir_dir / "nodes.jsonl").write_bytes(b"")
+    (ir_dir / "edges.jsonl").write_text("")
+    result = CliRunner().invoke(main, ["find", "f", "--ir-dir", str(ir_dir)])
+    assert result.exit_code != 0
+    assert "empty" in result.output
+    assert "Traceback" not in result.output
+
+
 def test_missing_ir_names_resolved_path(tmp_path):
     result = CliRunner().invoke(
         main, ["find", "x", "--ir-dir", str(tmp_path / "missing")]
     )
     assert result.exit_code != 0
     assert str((tmp_path / "missing").resolve()) in result.output
+
+
+def test_query_offline_skips_neo4j_when_history_is_missing(tmp_path, monkeypatch):
+    ir_dir = tmp_path / "graph"
+    write_jsonl(ir_dir / "nodes.jsonl", [
+        Node(id="lib::a.py::base", kind="function", name="base", repo="lib", path="a.py"),
+    ])
+    write_jsonl(ir_dir / "edges.jsonl", [])
+    monkeypatch.setattr(
+        "repograph.load.neo4j_loader.Neo4jLoader",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("offline must not open Neo4j")),
+    )
+    result = CliRunner().invoke(main, [
+        "query", "--offline", "--json", "--ir-dir", str(ir_dir),
+        "--neo4j-password", "secret",
+        "--changed", "lib::a.py::base",
+    ])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["freshness"]["available"] is False
 
 
 def test_truncated_ir_is_an_error_not_empty_results(tmp_path):

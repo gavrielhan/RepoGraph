@@ -108,3 +108,76 @@ def test_freshness_falls_back_to_neo4j_meta(tmp_path):
     assert info["available"]
     assert info["source"] == "neo4j"
     assert info["run_id"] == "neo-run"
+
+
+def test_freshness_reads_last_record_larger_than_64kib(tmp_path):
+    import json
+
+    first = json.dumps(
+        {"id": "old", "sha": "111111111111", "at": "2020-01-01T00:00:00Z", "source": "ci"}
+    )
+    second = {
+        "id": "new",
+        "sha": "abcdef123456",
+        "at": "2026-08-16T00:00:00Z",
+        "source": "cli",
+        "repo_shas": {"app": "abcdef"},
+        "changes": [
+            {
+                "op": "upsert",
+                "node_id": f"app::mod.py::n{i}",
+                "kind": "function",
+                "name": f"n{i}",
+            }
+            for i in range(2500)
+        ],
+    }
+    payload = json.dumps(second)
+    assert len(payload.encode()) > 65536
+    (tmp_path / "runs.jsonl").write_text(first + "\n" + payload + "\n")
+    info = freshness(tmp_path)
+    assert info["run_id"] == "new"
+    assert info["source"] == "ir"
+
+    (tmp_path / "runs.jsonl").write_text(payload + "\n")
+    info = freshness(tmp_path)
+    assert info["available"]
+    assert info["run_id"] == "new"
+
+
+def test_freshness_offline_does_not_open_neo4j(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from repograph.load.history import freshness_for_config
+
+    monkeypatch.setattr(
+        "repograph.load.neo4j_loader.Neo4jLoader",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not construct Neo4jLoader")),
+    )
+    cfg = SimpleNamespace(
+        ir_dir=tmp_path,
+        neo4j=SimpleNamespace(uri="bolt://x", user="u", password="secret", database="neo4j"),
+    )
+    info = freshness_for_config(cfg, offline=True)
+    assert not info["available"]
+    assert "No index history" in info["warning"]
+
+
+def test_freshness_neo4j_failure_is_a_warning(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from repograph.load.history import freshness_for_config
+
+    class Boom:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("bad credentials")
+
+    monkeypatch.setattr("repograph.load.neo4j_loader.Neo4jLoader", Boom)
+    cfg = SimpleNamespace(
+        ir_dir=tmp_path,
+        neo4j=SimpleNamespace(uri="bolt://x", user="u", password="secret", database="neo4j"),
+    )
+    info = freshness_for_config(cfg, offline=False)
+    assert not info["available"]
+    assert "bad credentials" in info["warning"]
+

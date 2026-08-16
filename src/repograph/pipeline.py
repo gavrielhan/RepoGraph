@@ -87,6 +87,11 @@ def load_ir(cfg: Config) -> tuple[list[Node], list[Edge]]:
             + ", ".join(missing)
             + f". Run `repograph run`/`reindex`, or set --ir-dir (resolved to {cfg.ir_dir})."
         )
+    if nodes_path.stat().st_size == 0:
+        raise IRError(
+            f"graph IR is empty: {nodes_path}. "
+            "This usually means a previous write did not finish; re-run `repograph reindex`."
+        )
     try:
         nodes = load_nodes(nodes_path)
         edges = load_resolved_edges(edges_path)
@@ -94,6 +99,11 @@ def load_ir(cfg: Config) -> tuple[list[Node], list[Edge]]:
         raise
     except (OSError, TypeError, ValueError) as exc:
         raise IRError(f"graph IR is unreadable at {cfg.ir_dir}: {exc}") from exc
+    if not nodes:
+        raise IRError(
+            f"graph IR has no nodes: {nodes_path}. "
+            "Re-run `repograph run`/`reindex`, or set --ir-dir."
+        )
     return nodes, edges
 
 
@@ -106,7 +116,8 @@ def run_pipeline(
     fetch_status: dict[str, dict] | None = None,
 ) -> PipelineStats:
     """Full pipeline. `full=False` loads incrementally against the last
-    snapshot; `full=True` rewrites every node."""
+    snapshot; `full=True` rewrites every node and deletes Neo4j code
+    nodes that are no longer in the IR."""
     stats = PipelineStats()
     stats.fetch_status = fetch_status or {}
     nodes, edges = build_ir(cfg, repo_roots, path_globs)
@@ -149,6 +160,10 @@ def run_pipeline(
         loader.load_index_run(run)
         stats.deleted_edges = loader.delete_edges(diff.delete_edge_keys)
         stats.deleted_nodes = loader.delete_nodes(diff.delete_node_ids)
+        if full:
+            keep = {node.id for node in nodes}
+            extras = [nid for nid in loader.list_code_node_ids() if nid not in keep]
+            stats.deleted_nodes += loader.delete_nodes(extras)
         loader.set_graph_state(run)
         append_run(cfg.ir_dir, run)
         save_snapshot(cfg.ir_dir, build_snapshot(nodes, edges, run_id=run.id))

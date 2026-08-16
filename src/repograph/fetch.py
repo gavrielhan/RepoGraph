@@ -3,12 +3,14 @@
 - Shallow clones (--depth 1) over HTTPS with the token passed as an
   Authorization header via `git -c`, so it is never written to
   .git/config or shell history.
-- Refresh is fetch + fast-forward only. It never ``reset --hard``, so a
-  dirty working tree or a diverged feature branch stays intact.
+- ``activate`` / ``run`` own the clone directory: clean checkouts may
+  ``reset --hard FETCH_HEAD`` so depth-1 clones can actually advance.
+- ``reindex`` may point at real working trees: it never resets. It
+  fast-forwards the current branch, and unshallows if a depth-1 history
+  has no merge base.
+- Dirty working trees are left untouched in both modes.
 - "Use existing checkout" mode (GitHub Actions workspaces) skips cloning
   when the directory already exists.
-- Per-repo path globs limit parsing scope for monorepos / huge repos; the
-  globs live on the RepoSpec and are applied at parse time.
 """
 
 from __future__ import annotations
@@ -32,14 +34,14 @@ class FetchResult:
 
 
 def ensure_repos(cfg: Config, repos: list[RepoSpec], token: str = "") -> FetchResult:
-    """Clone missing repos and fast-forward existing git checkouts."""
+    """Clone missing repos. Owned checkouts may hard-reset to FETCH_HEAD."""
     cfg.clone_dir.mkdir(parents=True, exist_ok=True)
     result = FetchResult()
     for spec in repos:
         dest = cfg.clone_dir / spec.name
         if dest.exists() and (dest / ".git").exists():
             if not cfg.use_existing_checkout:
-                result.statuses[spec.name] = _refresh(dest, token)
+                result.statuses[spec.name] = _refresh(dest, token, allow_reset=True)
             else:
                 result.statuses[spec.name] = {
                     "status": "skipped",
@@ -63,12 +65,12 @@ def ensure_repos(cfg: Config, repos: list[RepoSpec], token: str = "") -> FetchRe
 
 
 def refresh_existing(roots: dict[str, Path], token: str = "") -> FetchResult:
-    """Fast-forward existing checkouts. Never clones and never resets."""
+    """Update existing checkouts without cloning or resetting."""
     result = FetchResult()
     for name, dest in roots.items():
         result.roots[name] = dest
         if (dest / ".git").exists():
-            result.statuses[name] = _refresh(dest, token)
+            result.statuses[name] = _refresh(dest, token, allow_reset=False)
         else:
             result.statuses[name] = {
                 "status": "skipped",
@@ -93,11 +95,13 @@ def _clone(spec: RepoSpec, dest: Path, token: str) -> None:
         raise CloneError(f"clone of {spec.full_name} failed: {result.stderr.strip()}")
 
 
-def _refresh(dest: Path, token: str) -> dict:
-    """Update remote refs, then fast-forward the current branch if it is safe.
+def _refresh(dest: Path, token: str, *, allow_reset: bool = False) -> dict:
+    """Fetch origin, then update HEAD if the working tree is clean.
 
-    Never runs ``reset --hard``. A dirty tree or a non-ff merge leaves HEAD
-    and the working tree unchanged and records why.
+    Owned clones (``allow_reset=True``) hard-reset to FETCH_HEAD so a
+    depth-1 history can advance. Reindex (``allow_reset=False``) only
+    fast-forwards the current branch, unshallowing when git refuses to
+    merge unrelated shallow histories.
     """
     before = _git_sha(dest)
     fetch = _run(
@@ -117,6 +121,25 @@ def _refresh(dest: Path, token: str) -> dict:
             "reason": "working tree has uncommitted changes",
             "sha": before,
         }
+    if allow_reset:
+        reset = _run(["git", "reset", "--hard", "--quiet", "FETCH_HEAD"], cwd=dest)
+        if reset.returncode != 0:
+            return {
+                "status": "failed",
+                "operation": "reset",
+                "reason": _safe_error(reset.stderr.strip() or reset.stdout.strip(), token),
+                "sha": before,
+            }
+        after = _git_sha(dest)
+        return {
+            "status": "updated" if before != after else "current",
+            "previous_sha": before,
+            "sha": after,
+        }
+    return _fast_forward(dest, token, before)
+
+
+def _fast_forward(dest: Path, token: str, before: str | None) -> dict:
     upstream = _upstream(dest)
     if not upstream:
         return {
@@ -125,6 +148,13 @@ def _refresh(dest: Path, token: str) -> dict:
             "sha": before,
         }
     merge = _run(["git", "merge", "--ff-only", "--quiet", upstream], cwd=dest)
+    if merge.returncode != 0 and _is_shallow(dest):
+        unshallow = _run(
+            ["git", *_auth_args(token), "fetch", "--unshallow", "--quiet", "origin"],
+            cwd=dest,
+        )
+        if unshallow.returncode == 0:
+            merge = _run(["git", "merge", "--ff-only", "--quiet", upstream], cwd=dest)
     if merge.returncode != 0:
         return {
             "status": "failed",
@@ -146,6 +176,12 @@ def _refresh(dest: Path, token: str) -> dict:
 def _is_dirty(dest: Path) -> bool:
     result = _run(["git", "status", "--porcelain"], cwd=dest)
     return bool(result.stdout.strip()) if result.returncode == 0 else True
+
+
+def _is_shallow(dest: Path) -> bool:
+    return (dest / ".git" / "shallow").exists() or (
+        _run(["git", "rev-parse", "--is-shallow-repository"], cwd=dest).stdout.strip() == "true"
+    )
 
 
 def _upstream(dest: Path) -> str | None:

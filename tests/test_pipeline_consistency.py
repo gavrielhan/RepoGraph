@@ -6,9 +6,11 @@ from repograph import pipeline
 
 class FakeLoader:
     instance = None
+    extra_ids: list[str] = []
 
     def __init__(self, *args):
         self.loaded = []
+        self.deleted = []
         self.state = None
         FakeLoader.instance = self
 
@@ -17,6 +19,9 @@ class FakeLoader:
 
     def graph_state_run_id(self):
         return "different-run"
+
+    def list_code_node_ids(self):
+        return list(self.extra_ids)
 
     def clear_code_graph(self):
         self.cleared = True
@@ -35,6 +40,7 @@ class FakeLoader:
         return len(keys)
 
     def delete_nodes(self, ids):
+        self.deleted.extend(ids)
         return len(ids)
 
     def set_graph_state(self, run):
@@ -71,4 +77,22 @@ def test_missing_snapshot_does_not_clear_populated_neo4j(tmp_path, monkeypatch):
 
     assert not stats.consistency_recovery
     assert stats.loaded_nodes == 1
+    assert not getattr(FakeLoader.instance, "cleared", False)
+
+
+def test_full_prunes_neo4j_ids_missing_from_ir(tmp_path, monkeypatch):
+    cfg = load_config(cwd=tmp_path)
+    cfg.neo4j.password = "test"
+    node = Node(id="app::a.py::f", kind="function", name="f", repo="app")
+    FakeLoader.extra_ids = ["app::a.py::f", "app::a.py::gone"]
+    monkeypatch.setattr(pipeline, "build_ir", lambda *args, **kwargs: ([node], []))
+    monkeypatch.setattr(pipeline, "Neo4jLoader", FakeLoader)
+
+    try:
+        stats = pipeline.run_pipeline(cfg, {"app": tmp_path}, full=True)
+    finally:
+        FakeLoader.extra_ids = []
+
+    assert stats.deleted_nodes == 1
+    assert FakeLoader.instance.deleted == ["app::a.py::gone"]
     assert not getattr(FakeLoader.instance, "cleared", False)
