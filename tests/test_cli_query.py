@@ -82,3 +82,11 @@ def test_query_rejects_unknown_guessed_symbol_id(tmp_path):
     ])
     assert result.exit_code != 0
     assert "repograph find" in result.output
+
+
+def test_missing_ir_names_resolved_path(tmp_path):
+    result = CliRunner().invoke(
+        main, ["find", "x", "--ir-dir", str(tmp_path / "missing")]
+    )
+    assert result.exit_code != 0
+    assert str((tmp_path / "missing").resolve()) in result.output

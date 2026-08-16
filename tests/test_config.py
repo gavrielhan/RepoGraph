@@ -8,6 +8,8 @@ def test_defaults(tmp_path):
     cfg = load_config(cwd=tmp_path)
     assert cfg.neo4j.uri == "bolt://localhost:7687"
     assert cfg.github.auth_flow == "device"
+    assert cfg.ir_dir == (tmp_path / ".repograph").resolve()
+    assert cfg.clone_dir == (tmp_path / "repos").resolve()
 
 
 def test_yaml_overrides_env(tmp_path, monkeypatch):
@@ -50,3 +52,9 @@ def test_env_token(tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "ghs_test")
     cfg = load_config(cwd=tmp_path)
     assert cfg.github.token == "ghs_test"
+
+
+def test_yaml_ir_dir_resolves_from_config_directory(tmp_path):
+    (tmp_path / "repograph.yaml").write_text("ir_dir: graph\n")
+    cfg = load_config(cwd=tmp_path)
+    assert cfg.ir_dir == (tmp_path / "graph").resolve()

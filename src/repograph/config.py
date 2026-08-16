@@ -70,7 +70,7 @@ class Config:
 
 def load_config(cwd: Path | None = None, overrides: dict | None = None) -> Config:
     """Build config from env vars, then repograph.yaml, then CLI overrides."""
-    cwd = cwd or Path.cwd()
+    cwd = (cwd or Path.cwd()).resolve()
     cfg = Config()
 
     _apply_env(cfg)
@@ -82,7 +82,13 @@ def load_config(cwd: Path | None = None, overrides: dict | None = None) -> Confi
     if overrides:
         _apply_overrides(cfg, overrides)
 
+    cfg.ir_dir = _absolute_from(cwd, cfg.ir_dir)
+    cfg.clone_dir = _absolute_from(cwd, cfg.clone_dir)
     return cfg
+
+
+def _absolute_from(base: Path, path: Path) -> Path:
+    return path.resolve() if path.is_absolute() else (base / path).resolve()
 
 
 def _apply_env(cfg: Config) -> None:

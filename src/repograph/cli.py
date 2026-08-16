@@ -328,8 +328,8 @@ def _resolve_changed(
 def _load_nodes(cfg: Config):
     try:
         nodes, _ = load_ir(cfg)
-    except FileNotFoundError:
-        raise click.ClickException("no IR found; run `repograph reindex` or `repograph run` first")
+    except FileNotFoundError as exc:
+        raise click.ClickException(str(exc))
     return nodes
 
 

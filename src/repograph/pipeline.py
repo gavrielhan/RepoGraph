@@ -78,8 +78,17 @@ def build_ir(cfg: Config, repo_roots: dict[str, Path], path_globs: dict[str, lis
 
 def load_ir(cfg: Config) -> tuple[list[Node], list[Edge]]:
     """Read the last-written IR from disk."""
-    nodes = load_nodes(cfg.ir_dir / "nodes.jsonl")
-    edges = load_resolved_edges(cfg.ir_dir / "edges.jsonl")
+    nodes_path = cfg.ir_dir / "nodes.jsonl"
+    edges_path = cfg.ir_dir / "edges.jsonl"
+    missing = [str(path) for path in (nodes_path, edges_path) if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(
+            "graph IR is missing: "
+            + ", ".join(missing)
+            + f". Run `repograph run`/`reindex`, or set --ir-dir (resolved to {cfg.ir_dir})."
+        )
+    nodes = load_nodes(nodes_path)
+    edges = load_resolved_edges(edges_path)
     return nodes, edges
 
 
