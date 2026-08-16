@@ -5,7 +5,7 @@ Commands:
   run       headless (CI): token + repo list from env/config
     query     blast-radius of the current branch, a PR, a diff, or a symbol
   runs      list index runs (what each graph build changed)
-  reindex   re-run parse/resolve/load (incremental unless --full)
+  reindex   fetch, then re-run parse/resolve/load (incremental unless --full)
 
 Config resolution order: CLI flags > repograph.yaml in cwd > env vars.
 Interactive vs headless is auto-detected (CI=true or --headless).
@@ -348,19 +348,33 @@ def _ids_from_diff(cfg: Config, ref: str, only_repo: str | None, nodes=None) -> 
 @main.command()
 @_common_options
 @click.option("--full", is_flag=True, help="Rewrite every node instead of diffing against the last snapshot.")
-def reindex(full, **kwargs):
-    """Re-run parse -> resolve -> load on the existing checkouts."""
+@click.option("--no-fetch", is_flag=True, help="Reparse local checkouts without fetching origin.")
+def reindex(full, no_fetch, **kwargs):
+    """Fetch repositories, then re-run parse -> resolve -> load."""
     cfg = _cfg(kwargs)
-    roots: dict[str, Path] = {}
+    existing: dict[str, Path] = {}
     if cfg.repos:
         for spec in cfg.repos:
             dest = cfg.clone_dir / spec.name
             if dest.exists():
-                roots[spec.name] = dest
+                existing[spec.name] = dest
     elif cfg.clone_dir.exists():
-        roots = {p.name: p for p in sorted(cfg.clone_dir.iterdir()) if p.is_dir()}
-    if not roots:
+        existing = {p.name: p for p in sorted(cfg.clone_dir.iterdir()) if p.is_dir()}
+    if not existing and not cfg.repos:
         raise click.ClickException(f"no checkouts found in {cfg.clone_dir}; run `repograph activate` first")
+
+    if no_fetch:
+        roots = existing
+    else:
+        from repograph.auth.github import cached_token
+
+        specs = cfg.repos or [RepoSpec(full_name=name) for name in existing]
+        cfg.use_existing_checkout = False
+        roots = ensure_repos(
+            cfg,
+            specs,
+            cfg.github.token or cached_token() or "",
+        )
 
     path_globs = {s.name: s.paths for s in cfg.repos if s.paths}
     click.echo(f"Reindexing {len(roots)} repo(s) ({'full' if full else 'incremental'})…")

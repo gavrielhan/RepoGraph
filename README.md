@@ -152,7 +152,8 @@ Set `REPOGRAPH_IR_DIR` or `ir_dir` to the directory containing
 ## Reindex and inspect history
 
 ```bash
-repograph reindex          # incremental
+repograph reindex          # fetch origins, then index incrementally
+repograph reindex --no-fetch  # deliberately use local checkouts
 repograph reindex --full   # rebuild every node
 repograph runs             # recent index runs
 repograph runs --sha abc123
