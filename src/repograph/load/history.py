@@ -161,34 +161,75 @@ def load_runs(ir_dir: Path) -> list[IndexRun]:
     return runs
 
 
+def load_latest_run_meta(ir_dir: Path) -> dict | None:
+    """Return the last runs.jsonl record without decoding every Change."""
+    rec = _last_jsonl_record(ir_dir / RUNS_FILENAME)
+    if rec is None:
+        return None
+    rec.pop("changes", None)
+    return rec
+
+
 def latest_run(ir_dir: Path) -> IndexRun | None:
-    runs = load_runs(ir_dir)
-    return runs[-1] if runs else None
+    rec = load_latest_run_meta(ir_dir)
+    if rec is None:
+        return None
+    rec.setdefault("changes", [])
+    rec["changes"] = [Change(**c) if not isinstance(c, Change) else c for c in rec.get("changes", [])]
+    return IndexRun(**rec)
 
 
-def freshness(ir_dir: Path, stale_after_days: int = 7) -> dict:
+def freshness(
+    ir_dir: Path,
+    stale_after_days: int = 7,
+    neo4j_meta: dict | None = None,
+) -> dict:
     """Return machine-readable graph freshness for CLI and agent consumers."""
-    run = latest_run(ir_dir)
-    if run is None:
+    rec = load_latest_run_meta(ir_dir)
+    source = "ir"
+    if rec is None and neo4j_meta:
+        rec = dict(neo4j_meta)
+        source = "neo4j"
+    if rec is None:
         return {
             "available": False,
             "stale": True,
             "warning": f"No index history found in {ir_dir / RUNS_FILENAME}.",
             "ir_dir": str(ir_dir),
+            "source": None,
         }
+
+    run_id = rec.get("id") or rec.get("run_id") or ""
+    sha = rec.get("sha") or ""
+    at = rec.get("at") or rec.get("indexed_at") or ""
+    repo_shas = rec.get("repo_shas") or {}
+    fetch_status = rec.get("fetch_status") or {}
+    if isinstance(repo_shas, str):
+        try:
+            repo_shas = json.loads(repo_shas)
+        except json.JSONDecodeError:
+            repo_shas = {}
+    if isinstance(fetch_status, str):
+        try:
+            fetch_status = json.loads(fetch_status)
+        except json.JSONDecodeError:
+            fetch_status = {}
 
     invalid_timestamp = False
     try:
-        indexed_at = datetime.fromisoformat(run.at.replace("Z", "+00:00"))
+        indexed_at = datetime.fromisoformat(at.replace("Z", "+00:00"))
         age_seconds = max(0, int((datetime.now(timezone.utc) - indexed_at).total_seconds()))
-    except ValueError:
+    except (ValueError, AttributeError):
         age_seconds = 0
-        invalid_timestamp = True
+        invalid_timestamp = not at
     stale = age_seconds > stale_after_days * 86400
-    fetch_status = getattr(run, "fetch_status", {}) or {}
     failed_fetches = sorted(
         repo for repo, status in fetch_status.items()
-        if status.get("status") == "failed"
+        if isinstance(status, dict) and status.get("status") == "failed"
+    )
+    dirty = sorted(
+        repo for repo, status in fetch_status.items()
+        if isinstance(status, dict) and status.get("status") == "dirty"
     )
     warnings = []
     if invalid_timestamp:
@@ -197,20 +238,41 @@ def freshness(ir_dir: Path, stale_after_days: int = 7) -> dict:
         warnings.append(f"graph is older than {stale_after_days} days")
     if failed_fetches:
         warnings.append("fetch failed for " + ", ".join(failed_fetches))
+    if dirty:
+        warnings.append("uncommitted changes in " + ", ".join(dirty))
     return {
         "available": True,
-        "run_id": run.id,
-        "sha": run.sha,
-        "indexed_at": run.at,
+        "run_id": run_id,
+        "sha": sha,
+        "indexed_at": at,
         "age_seconds": age_seconds,
         "age_days": round(age_seconds / 86400, 2),
         "stale": stale or bool(failed_fetches) or invalid_timestamp,
-        "repo_count": len(run.repo_shas),
-        "repo_shas": run.repo_shas,
+        "repo_count": len(repo_shas),
+        "repo_shas": repo_shas,
         "fetch_status": fetch_status,
         "warning": "; ".join(warnings) if warnings else None,
         "ir_dir": str(ir_dir),
+        "source": source,
     }
+
+
+def freshness_for_config(cfg, stale_after_days: int = 7) -> dict:
+    """Freshness from runs.jsonl, then Neo4j when the local history is absent."""
+    info = freshness(cfg.ir_dir, stale_after_days=stale_after_days)
+    if info.get("available") or not getattr(cfg, "neo4j", None) or not cfg.neo4j.password:
+        return info
+    from repograph.load.neo4j_loader import Neo4jLoader
+
+    loader = Neo4jLoader(cfg.neo4j.uri, cfg.neo4j.user, cfg.neo4j.password, cfg.neo4j.database)
+    try:
+        return freshness(
+            cfg.ir_dir,
+            stale_after_days=stale_after_days,
+            neo4j_meta=loader.latest_run_meta(),
+        )
+    finally:
+        loader.close()
 
 
 def format_freshness(info: dict) -> str:
@@ -272,3 +334,25 @@ def _format_age(seconds: int) -> str:
     if seconds < 86400:
         return f"{seconds // 3600}h"
     return f"{seconds // 86400}d"
+
+
+def _last_jsonl_record(path: Path) -> dict | None:
+    if not path.is_file() or path.stat().st_size == 0:
+        return None
+    with path.open("rb") as f:
+        f.seek(0, os.SEEK_END)
+        size = f.tell()
+        chunk = min(size, 65536)
+        f.seek(size - chunk)
+        data = f.read().decode("utf-8", errors="replace")
+    lines = [ln for ln in data.splitlines() if ln.strip()]
+    if not lines:
+        return None
+    for candidate in reversed(lines):
+        try:
+            rec = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(rec, dict):
+            return rec
+    return None

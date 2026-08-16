@@ -138,7 +138,7 @@ def test_graph_state_stamps_completed_run():
     assert loader.graph_state_run_id() is None
     loader.set_graph_state("run-2")
     assert any(
-        "MERGE (s:GraphState {id: 'current'}) SET s.run_id = $run_id" in cypher
+        "SET s.run_id = $run_id" in cypher
         and params["run_id"] == "run-2"
         for cypher, params in log
     )

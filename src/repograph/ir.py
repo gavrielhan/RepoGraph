@@ -27,9 +27,15 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Iterator
+
+
+class IRError(ValueError):
+    """Invalid or truncated IR JSONL."""
 
 PENDING_TYPES = {
     "CALLS_PENDING",
@@ -93,23 +99,38 @@ class Edge:
 
 
 def write_jsonl(path: Path, records: Iterable) -> int:
-    """Write records (dataclasses or dicts) to a JSONL file. Returns count."""
+    """Atomically write records (dataclasses or dicts) to a JSONL file."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
     n = 0
-    with path.open("w", encoding="utf-8") as f:
-        for rec in records:
-            payload = rec.to_json() if hasattr(rec, "to_json") else rec
-            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
-            n += 1
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for rec in records:
+                payload = rec.to_json() if hasattr(rec, "to_json") else rec
+                f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+                n += 1
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     return n
 
 
 def read_jsonl(path: Path) -> Iterator[dict]:
     with path.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
+        for lineno, raw in enumerate(f, 1):
+            line = raw.strip()
+            if not line:
+                continue
+            try:
                 yield json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise IRError(
+                    f"truncated or invalid JSONL at {path}:{lineno}: {exc.msg}"
+                ) from exc
 
 
 def load_nodes(path: Path) -> list[Node]:

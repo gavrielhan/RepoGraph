@@ -3,6 +3,8 @@
 - Shallow clones (--depth 1) over HTTPS with the token passed as an
   Authorization header via `git -c`, so it is never written to
   .git/config or shell history.
+- Refresh is fetch + fast-forward only. It never ``reset --hard``, so a
+  dirty working tree or a diverged feature branch stays intact.
 - "Use existing checkout" mode (GitHub Actions workspaces) skips cloning
   when the directory already exists.
 - Per-repo path globs limit parsing scope for monorepos / huge repos; the
@@ -30,7 +32,7 @@ class FetchResult:
 
 
 def ensure_repos(cfg: Config, repos: list[RepoSpec], token: str = "") -> FetchResult:
-    """Clone or refresh repos and report freshness without hiding failures."""
+    """Clone missing repos and fast-forward existing git checkouts."""
     cfg.clone_dir.mkdir(parents=True, exist_ok=True)
     result = FetchResult()
     for spec in repos:
@@ -60,6 +62,22 @@ def ensure_repos(cfg: Config, repos: list[RepoSpec], token: str = "") -> FetchRe
     return result
 
 
+def refresh_existing(roots: dict[str, Path], token: str = "") -> FetchResult:
+    """Fast-forward existing checkouts. Never clones and never resets."""
+    result = FetchResult()
+    for name, dest in roots.items():
+        result.roots[name] = dest
+        if (dest / ".git").exists():
+            result.statuses[name] = _refresh(dest, token)
+        else:
+            result.statuses[name] = {
+                "status": "skipped",
+                "reason": "no git metadata",
+                "sha": None,
+            }
+    return result
+
+
 def _auth_args(token: str) -> list[str]:
     if not token:
         return []
@@ -70,32 +88,53 @@ def _auth_args(token: str) -> list[str]:
 def _clone(spec: RepoSpec, dest: Path, token: str) -> None:
     url = spec.clone_url or f"https://github.com/{spec.full_name}.git"
     cmd = ["git", *_auth_args(token), "clone", "--depth", "1", "--quiet", url, str(dest)]
-    result = subprocess.run(
-        cmd, capture_output=True, text=True, env={"GIT_TERMINAL_PROMPT": "0", "PATH": _path()}
-    )
+    result = _run(cmd)
     if result.returncode != 0:
         raise CloneError(f"clone of {spec.full_name} failed: {result.stderr.strip()}")
 
 
 def _refresh(dest: Path, token: str) -> dict:
+    """Update remote refs, then fast-forward the current branch if it is safe.
+
+    Never runs ``reset --hard``. A dirty tree or a non-ff merge leaves HEAD
+    and the working tree unchanged and records why.
+    """
     before = _git_sha(dest)
-    for operation, cmd in (
-        ("fetch", ["git", *_auth_args(token), "fetch", "--depth", "1", "--quiet", "origin"]),
-        ("reset", ["git", "reset", "--hard", "--quiet", "FETCH_HEAD"]),
-    ):
-        result = subprocess.run(
-            cmd, cwd=dest, capture_output=True, text=True,
-            env={"GIT_TERMINAL_PROMPT": "0", "PATH": _path()},
-        )
-        if result.returncode != 0:
-            return {
-                "status": "failed",
-                "operation": operation,
-                "reason": _safe_error(
-                    result.stderr.strip() or result.stdout.strip(), token
-                ),
-                "sha": before,
-            }
+    fetch = _run(
+        ["git", *_auth_args(token), "fetch", "--depth", "1", "--quiet", "origin"],
+        cwd=dest,
+    )
+    if fetch.returncode != 0:
+        return {
+            "status": "failed",
+            "operation": "fetch",
+            "reason": _safe_error(fetch.stderr.strip() or fetch.stdout.strip(), token),
+            "sha": before,
+        }
+    if _is_dirty(dest):
+        return {
+            "status": "dirty",
+            "reason": "working tree has uncommitted changes",
+            "sha": before,
+        }
+    upstream = _upstream(dest)
+    if not upstream:
+        return {
+            "status": "current",
+            "reason": "no upstream configured",
+            "sha": before,
+        }
+    merge = _run(["git", "merge", "--ff-only", "--quiet", upstream], cwd=dest)
+    if merge.returncode != 0:
+        return {
+            "status": "failed",
+            "operation": "merge",
+            "reason": _safe_error(
+                merge.stderr.strip() or merge.stdout.strip() or "not a fast-forward",
+                token,
+            ),
+            "sha": before,
+        }
     after = _git_sha(dest)
     return {
         "status": "updated" if before != after else "current",
@@ -104,12 +143,31 @@ def _refresh(dest: Path, token: str) -> dict:
     }
 
 
+def _is_dirty(dest: Path) -> bool:
+    result = _run(["git", "status", "--porcelain"], cwd=dest)
+    return bool(result.stdout.strip()) if result.returncode == 0 else True
+
+
+def _upstream(dest: Path) -> str | None:
+    result = _run(["git", "rev-parse", "--abbrev-ref", "@{u}"], cwd=dest)
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
 def _git_sha(dest: Path) -> str | None:
-    result = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=dest, capture_output=True, text=True,
-    )
+    result = _run(["git", "rev-parse", "HEAD"], cwd=dest)
     return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _run(cmd: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        cmd,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        env={"GIT_TERMINAL_PROMPT": "0", "PATH": _path()},
+    )
 
 
 def _safe_error(message: str, token: str) -> str:

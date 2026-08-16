@@ -22,6 +22,7 @@ import click
 
 from repograph.config import Config, RepoSpec, load_config
 from repograph.fetch import ensure_repos
+from repograph.ir import IRError
 from repograph.pipeline import load_ir, run_pipeline
 
 
@@ -42,6 +43,31 @@ def _common_options(fn):
 
 def _cfg(kwargs) -> Config:
     return load_config(overrides=kwargs)
+
+
+class _LoadedIR:
+    """Load nodes.jsonl / edges.jsonl at most once per CLI invocation."""
+
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
+        self._pair: tuple | None = None
+
+    def pair(self):
+        if self._pair is None:
+            try:
+                self._pair = load_ir(self.cfg)
+            except (FileNotFoundError, IRError) as exc:
+                raise click.ClickException(str(exc))
+        return self._pair
+
+    def nodes(self):
+        return self.pair()[0]
+
+
+def _freshness(cfg: Config) -> dict:
+    from repograph.load.history import freshness_for_config
+
+    return freshness_for_config(cfg)
 
 
 @click.group()
@@ -200,12 +226,14 @@ def query(
     if not any(sources):
         branch_ref = "HEAD"  # default: current branch / possible PR
 
-    header, changed_ids = _resolve_changed(
-        cfg, changed_id, diff_ref, branch_ref, pr_spec, base_ref, committed, diff_repo
-    )
-    from repograph.load.history import format_freshness, freshness
+    from repograph.load.history import format_freshness
 
-    fresh = freshness(cfg.ir_dir)
+    ir = _LoadedIR(cfg)
+    header, changed_ids = _resolve_changed(
+        cfg, changed_id, diff_ref, branch_ref, pr_spec, base_ref, committed, diff_repo,
+        ir=ir,
+    )
+    fresh = _freshness(cfg)
     if not changed_ids:
         if json_output:
             click.echo(json.dumps({
@@ -224,7 +252,7 @@ def query(
 
     seen: dict[str, dict] = {}
     for cid in changed_ids:
-        for r in _blast_one(cfg, cid, max_depth, offline):
+        for r in _blast_one(cfg, cid, max_depth, offline, ir=ir):
             prev = seen.get(r["id"])
             if prev is None or (r.get("confidence") or 0) > (prev.get("confidence") or 0):
                 seen[r["id"]] = r
@@ -242,11 +270,11 @@ def query(
         click.echo(format_results(results, header, changed_ids=changed_ids))
 
 
-def _blast_one(cfg: Config, cid: str, max_depth: int, offline: bool) -> list[dict]:
+def _blast_one(cfg: Config, cid: str, max_depth: int, offline: bool, ir: _LoadedIR | None = None) -> list[dict]:
     from repograph.query.blast_radius import blast_radius, blast_radius_ir
 
     if offline or not cfg.neo4j.password:
-        nodes, edges = load_ir(cfg)
+        nodes, edges = ir.pair() if ir is not None else load_ir(cfg)
         return blast_radius_ir(nodes, edges, cid, max_depth)
     from repograph.load.neo4j_loader import Neo4jLoader
 
@@ -269,17 +297,17 @@ def _resolve_changed(
     base_ref,
     committed,
     diff_repo,
+    ir: _LoadedIR | None = None,
 ) -> tuple[str, list[str]]:
+    nodes = ir.nodes() if ir is not None else _load_nodes(cfg)
     if changed_id:
-        known_ids = {node.id for node in _load_nodes(cfg)}
+        known_ids = {node.id for node in nodes}
         if changed_id not in known_ids:
             raise click.ClickException(
                 f"symbol ID is not present in {cfg.ir_dir / 'nodes.jsonl'}; "
                 "use `repograph find <name>` instead of guessing an ID"
             )
         return changed_id, [changed_id]
-
-    nodes = _load_nodes(cfg)
 
     if pr_spec:
         from repograph.query.pr import PRError, github_token, parse_pr_spec, pr_diff_ranges
@@ -326,11 +354,7 @@ def _resolve_changed(
 
 
 def _load_nodes(cfg: Config):
-    try:
-        nodes, _ = load_ir(cfg)
-    except FileNotFoundError as exc:
-        raise click.ClickException(str(exc))
-    return nodes
+    return _LoadedIR(cfg).nodes()
 
 
 def _cwd_git_root():
@@ -395,12 +419,19 @@ def _ids_from_diff(cfg: Config, ref: str, only_repo: str | None, nodes=None) -> 
 def find(pattern, limit, json_output, **kwargs):
     """Find symbol IDs by name, path, signature, or ID substring."""
     cfg = _cfg(kwargs)
+    from repograph.load.history import format_freshness
     from repograph.query.find import find_symbols
 
+    fresh = _freshness(cfg)
     matches = find_symbols(_load_nodes(cfg), pattern, limit=limit)
     if json_output:
-        click.echo(json.dumps(matches, sort_keys=True))
+        click.echo(json.dumps({
+            "freshness": fresh,
+            "count": len(matches),
+            "matches": matches,
+        }, sort_keys=True))
         return
+    click.echo(format_freshness(fresh))
     if not matches:
         click.echo(f"No indexed symbols match {pattern!r}.")
         return
@@ -425,9 +456,14 @@ def reindex(full, no_fetch, **kwargs):
             dest = cfg.clone_dir / spec.name
             if dest.exists():
                 existing[spec.name] = dest
+            else:
+                click.echo(
+                    f"WARNING: no checkout for {spec.full_name} in {cfg.clone_dir}",
+                    err=True,
+                )
     elif cfg.clone_dir.exists():
         existing = {p.name: p for p in sorted(cfg.clone_dir.iterdir()) if p.is_dir()}
-    if not existing and not cfg.repos:
+    if not existing:
         raise click.ClickException(f"no checkouts found in {cfg.clone_dir}; run `repograph activate` first")
 
     if no_fetch:
@@ -438,19 +474,20 @@ def reindex(full, no_fetch, **kwargs):
         }
     else:
         from repograph.auth.github import cached_token
+        from repograph.fetch import CloneError, refresh_existing
 
-        specs = cfg.repos or [RepoSpec(full_name=name) for name in existing]
-        cfg.use_existing_checkout = False
-        fetched = ensure_repos(
-            cfg,
-            specs,
-            cfg.github.token or cached_token() or "",
-        )
+        try:
+            fetched = refresh_existing(
+                existing,
+                cfg.github.token or cached_token() or "",
+            )
+        except CloneError as e:
+            raise click.ClickException(str(e))
         roots, fetch_status = fetched.roots, fetched.statuses
         for repo, status in fetch_status.items():
-            if status.get("status") == "failed":
+            if status.get("status") in {"failed", "dirty"}:
                 click.echo(
-                    f"WARNING: fetch failed for {repo}; indexing stale checkout "
+                    f"WARNING: fetch did not update {repo}; indexing checkout "
                     f"{status.get('sha') or '(unknown sha)'}: {status.get('reason')}",
                     err=True,
                 )

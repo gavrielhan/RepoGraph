@@ -49,3 +49,30 @@ def test_find_symbols_over_mcp_protocol(tmp_path):
 
     payload = asyncio.run(call())
     assert payload["matches"][0]["id"] == "app::jobs.py::run_job"
+
+
+def test_graph_cache_retries_when_files_change_during_load(tmp_path, monkeypatch):
+    from repograph import mcp as mcp_mod
+
+    cfg = load_config(cwd=tmp_path)
+    write_jsonl(cfg.ir_dir / "nodes.jsonl", [
+        Node(id="app::a.py::one", kind="function", name="one", repo="app"),
+    ])
+    write_jsonl(cfg.ir_dir / "edges.jsonl", [])
+    original = mcp_mod.load_ir
+    calls = {"n": 0}
+
+    def mutating(cfg_):
+        calls["n"] += 1
+        result = original(cfg_)
+        if calls["n"] == 1:
+            write_jsonl(cfg.ir_dir / "nodes.jsonl", [
+                Node(id="app::a.py::two", kind="function", name="two", repo="app"),
+            ])
+            write_jsonl(cfg.ir_dir / "edges.jsonl", [])
+        return result
+
+    monkeypatch.setattr(mcp_mod, "load_ir", mutating)
+    nodes, _ = GraphCache(cfg).load()
+    assert calls["n"] == 2
+    assert [node.name for node in nodes] == ["two"]

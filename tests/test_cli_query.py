@@ -69,7 +69,9 @@ def test_find_returns_symbol_ids(tmp_path):
         main, ["find", "run_job", "--json", "--ir-dir", str(ir_dir)]
     )
     assert result.exit_code == 0, result.output
-    assert json.loads(result.output)[0]["id"] == "app::jobs.py::run_job"
+    payload = json.loads(result.output)
+    assert payload["matches"][0]["id"] == "app::jobs.py::run_job"
+    assert "freshness" in payload
 
 
 def test_query_rejects_unknown_guessed_symbol_id(tmp_path):
@@ -90,3 +92,14 @@ def test_missing_ir_names_resolved_path(tmp_path):
     )
     assert result.exit_code != 0
     assert str((tmp_path / "missing").resolve()) in result.output
+
+
+def test_truncated_ir_is_an_error_not_empty_results(tmp_path):
+    ir_dir = tmp_path / "graph"
+    ir_dir.mkdir()
+    (ir_dir / "nodes.jsonl").write_text('{ "id": "app::a.py::f", "kind": "function"\n')
+    (ir_dir / "edges.jsonl").write_text("")
+    result = CliRunner().invoke(main, ["find", "f", "--ir-dir", str(ir_dir)])
+    assert result.exit_code != 0
+    assert "truncated or invalid JSONL" in result.output
+    assert "Traceback" not in result.output

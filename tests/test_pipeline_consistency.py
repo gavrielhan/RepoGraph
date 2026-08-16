@@ -37,8 +37,8 @@ class FakeLoader:
     def delete_nodes(self, ids):
         return len(ids)
 
-    def set_graph_state(self, run_id):
-        self.state = run_id
+    def set_graph_state(self, run):
+        self.state = run if isinstance(run, str) else run.id
 
     def close(self):
         pass
@@ -56,5 +56,19 @@ def test_run_pipeline_full_loads_when_neo4j_state_disagrees(tmp_path, monkeypatc
 
     assert stats.consistency_recovery
     assert stats.loaded_nodes == 1
-    assert FakeLoader.instance.cleared
+    assert not getattr(FakeLoader.instance, "cleared", False)
     assert FakeLoader.instance.state == stats.run_id
+
+
+def test_missing_snapshot_does_not_clear_populated_neo4j(tmp_path, monkeypatch):
+    cfg = load_config(cwd=tmp_path)
+    cfg.neo4j.password = "test"
+    node = Node(id="app::a.py::f", kind="function", name="f", repo="app")
+    monkeypatch.setattr(pipeline, "build_ir", lambda *args, **kwargs: ([node], []))
+    monkeypatch.setattr(pipeline, "Neo4jLoader", FakeLoader)
+
+    stats = pipeline.run_pipeline(cfg, {"app": tmp_path})
+
+    assert not stats.consistency_recovery
+    assert stats.loaded_nodes == 1
+    assert not getattr(FakeLoader.instance, "cleared", False)

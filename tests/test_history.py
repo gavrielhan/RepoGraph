@@ -68,3 +68,43 @@ def test_freshness_reports_stale_index(tmp_path):
     assert info["repo_count"] == 1
     assert "fetch failed for app" in info["warning"]
     assert format_freshness(info).startswith("WARNING:")
+
+
+def test_freshness_reads_last_runs_line_only(tmp_path):
+    import json
+
+    first = {
+        "id": "old",
+        "sha": "111111111111",
+        "at": "2020-01-01T00:00:00Z",
+        "source": "ci",
+        "changes": [{"op": "upsert", "node_id": f"n{i}"} for i in range(50)],
+    }
+    second = {
+        "id": "new",
+        "sha": "abcdef123456",
+        "at": "2026-08-16T00:00:00Z",
+        "source": "cli",
+        "repo_shas": {"app": "abcdef"},
+    }
+    (tmp_path / "runs.jsonl").write_text(
+        json.dumps(first) + "\n" + json.dumps(second) + "\n"
+    )
+    info = freshness(tmp_path)
+    assert info["run_id"] == "new"
+    assert info["source"] == "ir"
+
+
+def test_freshness_falls_back_to_neo4j_meta(tmp_path):
+    info = freshness(
+        tmp_path,
+        neo4j_meta={
+            "id": "neo-run",
+            "sha": "abcdef123456",
+            "at": "2026-08-16T00:00:00Z",
+            "repo_shas": {"app": "abcdef"},
+        },
+    )
+    assert info["available"]
+    assert info["source"] == "neo4j"
+    assert info["run_id"] == "neo-run"

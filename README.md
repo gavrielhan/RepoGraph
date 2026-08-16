@@ -102,7 +102,10 @@ configured, the same run is also loaded into Neo4j.
 ## Analyze changes
 
 Run these commands from a repository that has already been indexed.
-Every query starts with the indexed SHA, age, and repository count. RepoGraph
+Human-readable `query` and `find` print a freshness line first (indexed SHA,
+age, and repository count). `--json` includes the same data in a `freshness`
+object rather than a leading line. If local `runs.jsonl` is missing, RepoGraph
+reads the latest index run from Neo4j when a password is configured. RepoGraph
 warns when the graph is over seven days old or a repository fetch failed; do
 not treat an empty result from a stale graph as proof that a change is safe.
 
@@ -148,7 +151,8 @@ repograph find run_job --json
 repograph query --offline --json
 ```
 
-Query JSON contains `freshness`, `changed_ids`, and `results`.
+Query JSON contains `freshness`, `changed_ids`, and `results`. Find JSON
+contains `freshness` and `matches`.
 
 ### Query graph files without Neo4j
 
@@ -162,12 +166,17 @@ Set `REPOGRAPH_IR_DIR` or `ir_dir` to the directory containing
 ## Reindex and inspect history
 
 ```bash
-repograph reindex          # fetch origins, then index incrementally
+repograph reindex          # fast-forward existing checkouts, then index
 repograph reindex --no-fetch  # deliberately use local checkouts
 repograph reindex --full   # rebuild every node
 repograph runs             # recent index runs
 repograph runs --sha abc123
 ```
+
+`reindex` fetches with `git merge --ff-only`. It never `reset --hard`, so
+uncommitted work and feature branches are left alone. Dirty or diverged
+checkouts are indexed as they are, with a warning. Missing configured
+checkouts are skipped rather than cloned.
 
 Every build appends an index run containing the Git SHA, timestamp, and
 upserted/deleted nodes to `runs.jsonl`. With Neo4j enabled, it also creates:

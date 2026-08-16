@@ -10,14 +10,18 @@ from typing import Any
 from mcp.server import MCPServer
 
 from repograph.config import Config, load_config
-from repograph.load.history import freshness
+from repograph.load.history import freshness_for_config
 from repograph.pipeline import load_ir
 from repograph.query.blast_radius import blast_radius_ir
 from repograph.query.find import find_symbols as lookup_symbols
 
 
 class GraphCache:
-    """Reload IR whenever either JSONL file changes."""
+    """Reload IR whenever either JSONL file changes.
+
+    Stamp the files *after* a successful read so a caller that lands mid-rebuild
+    cannot cache a half-written graph under a later mtime.
+    """
 
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -25,19 +29,31 @@ class GraphCache:
         self.edges = []
         self._stamp: tuple | None = None
 
+    def _file_stamp(self) -> tuple:
+        stamp = []
+        for path in (self.cfg.ir_dir / "nodes.jsonl", self.cfg.ir_dir / "edges.jsonl"):
+            if not path.exists():
+                return tuple()
+            stat = path.stat()
+            stamp.append((stat.st_mtime_ns, stat.st_size))
+        return tuple(stamp)
+
     def load(self, force: bool = False):
-        stamp = tuple(
-            (path.stat().st_mtime_ns, path.stat().st_size)
-            for path in (
-                self.cfg.ir_dir / "nodes.jsonl",
-                self.cfg.ir_dir / "edges.jsonl",
-            )
-            if path.exists()
-        )
-        if force or stamp != self._stamp or len(stamp) != 2:
+        from repograph.ir import IRError
+
+        for _ in range(5):
+            before = self._file_stamp()
+            if not force and before == self._stamp and len(before) == 2:
+                return self.nodes, self.edges
             self.nodes, self.edges = load_ir(self.cfg)
-            self._stamp = stamp
-        return self.nodes, self.edges
+            after = self._file_stamp()
+            if after == before and len(after) == 2:
+                self._stamp = after
+                return self.nodes, self.edges
+            force = False
+        raise IRError(
+            f"graph IR at {self.cfg.ir_dir} changed while reading; retry after reindex finishes"
+        )
 
 
 def create_server(cfg: Config) -> MCPServer:
@@ -60,7 +76,7 @@ def create_server(cfg: Config) -> MCPServer:
         """
         nodes, _ = cache.load()
         return {
-            "freshness": freshness(cfg.ir_dir),
+            "freshness": freshness_for_config(cfg),
             "matches": lookup_symbols(nodes, pattern, limit=limit),
         }
 
@@ -78,7 +94,7 @@ def create_server(cfg: Config) -> MCPServer:
         known_ids = {node.id for node in nodes}
         if symbol_id not in known_ids:
             return {
-                "freshness": freshness(cfg.ir_dir),
+                "freshness": freshness_for_config(cfg),
                 "symbol_id": symbol_id,
                 "symbol_found": False,
                 "error": "Symbol ID is not present in the indexed graph; call find_symbols.",
@@ -87,7 +103,7 @@ def create_server(cfg: Config) -> MCPServer:
             }
         results = blast_radius_ir(nodes, edges, symbol_id, max_depth=max_depth)
         return {
-            "freshness": freshness(cfg.ir_dir),
+            "freshness": freshness_for_config(cfg),
             "symbol_id": symbol_id,
             "symbol_found": True,
             "count": len(results),
@@ -97,7 +113,7 @@ def create_server(cfg: Config) -> MCPServer:
     @server.tool(structured_output=True)
     def graph_freshness() -> dict[str, Any]:
         """Report when and from which repository SHAs the graph was indexed."""
-        return freshness(cfg.ir_dir)
+        return freshness_for_config(cfg)
 
     @server.tool(structured_output=True)
     def refresh() -> dict[str, Any]:
@@ -109,7 +125,7 @@ def create_server(cfg: Config) -> MCPServer:
         """
         nodes, edges = cache.load(force=True)
         return {
-            "freshness": freshness(cfg.ir_dir),
+            "freshness": freshness_for_config(cfg),
             "nodes": len(nodes),
             "edges": len(edges),
         }

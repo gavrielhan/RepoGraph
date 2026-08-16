@@ -156,10 +156,28 @@ class Neo4jLoader:
         return self.run_query(
             "MATCH (r:IndexRun) RETURN r.id AS id, r.sha AS sha, r.at AS at, "
             "r.source AS source, r.trigger_repo AS trigger_repo, "
+            "r.repo_shas AS repo_shas, r.fetch_status AS fetch_status, "
             "r.upserted AS upserted, r.deleted AS deleted "
             "ORDER BY r.at DESC LIMIT $limit",
             limit=limit,
         )
+
+    def latest_run_meta(self) -> dict | None:
+        """Return the GraphState singleton, falling back to the newest IndexRun."""
+        rows = self.run_query(
+            "MATCH (s:GraphState {id: 'current'}) "
+            "RETURN s.run_id AS id, s.sha AS sha, s.indexed_at AS at, "
+            "s.repo_shas AS repo_shas, s.fetch_status AS fetch_status"
+        )
+        rec = rows[0] if rows and rows[0].get("id") else None
+        if rec is None:
+            runs = self.list_index_runs(limit=1)
+            rec = dict(runs[0]) if runs else None
+        if rec is None:
+            return None
+        rec["repo_shas"] = _maybe_json(rec.get("repo_shas"), {})
+        rec["fetch_status"] = _maybe_json(rec.get("fetch_status"), {})
+        return rec
 
     def graph_state_run_id(self) -> str | None:
         rows = self.run_query(
@@ -167,15 +185,31 @@ class Neo4jLoader:
         )
         return rows[0]["run_id"] if rows else None
 
-    def set_graph_state(self, run_id: str) -> None:
+    def set_graph_state(self, run) -> None:
+        if isinstance(run, str):
+            params = {"run_id": run, "sha": "", "at": "", "repo_shas": "{}", "fetch_status": "{}"}
+        else:
+            params = {
+                "run_id": run.id,
+                "sha": run.sha,
+                "at": run.at,
+                "repo_shas": json.dumps(run.repo_shas),
+                "fetch_status": json.dumps(getattr(run, "fetch_status", {}) or {}),
+            }
         with self._session() as session:
             session.run(
-                "MERGE (s:GraphState {id: 'current'}) SET s.run_id = $run_id",
-                run_id=run_id,
+                "MERGE (s:GraphState {id: 'current'}) "
+                "SET s.run_id = $run_id, s.sha = $sha, s.indexed_at = $at, "
+                "s.repo_shas = $repo_shas, s.fetch_status = $fetch_status",
+                **params,
             ).consume()
 
     def clear_code_graph(self) -> None:
-        """Remove current graph entities while retaining index-run history."""
+        """Delete Repo/Module/Symbol/Dataset nodes.
+
+        This also drops ``(:IndexRun)-[:TOUCHED]->(:Symbol)`` history. Do not
+        call it for snapshot/Neo4j mismatch recovery — upsert instead.
+        """
         with self._session() as session:
             session.run(
                 "MATCH (n) WHERE n:Repo OR n:Module OR n:Symbol OR n:Dataset "
@@ -225,3 +259,14 @@ class Neo4jLoader:
 def _chunks(items: list, size: int):
     for i in range(0, len(items), size):
         yield items[i : i + size]
+
+
+def _maybe_json(value, default=None):
+    if value in (None, ""):
+        return default
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        return json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return default

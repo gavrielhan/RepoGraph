@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from repograph.config import Config
-from repograph.ir import Edge, Node, load_nodes, load_resolved_edges, write_jsonl
+from repograph.ir import IRError, Edge, Node, load_nodes, load_resolved_edges, write_jsonl
 from repograph.load.history import append_run, build_index_run
 from repograph.load.neo4j_loader import Neo4jLoader
 from repograph.load.snapshot import (
@@ -87,8 +87,13 @@ def load_ir(cfg: Config) -> tuple[list[Node], list[Edge]]:
             + ", ".join(missing)
             + f". Run `repograph run`/`reindex`, or set --ir-dir (resolved to {cfg.ir_dir})."
         )
-    nodes = load_nodes(nodes_path)
-    edges = load_resolved_edges(edges_path)
+    try:
+        nodes = load_nodes(nodes_path)
+        edges = load_resolved_edges(edges_path)
+    except IRError:
+        raise
+    except (OSError, TypeError, ValueError) as exc:
+        raise IRError(f"graph IR is unreadable at {cfg.ir_dir}: {exc}") from exc
     return nodes, edges
 
 
@@ -116,16 +121,17 @@ def run_pipeline(
                 cfg.neo4j.uri, cfg.neo4j.user, cfg.neo4j.password, cfg.neo4j.database
             )
             loader.ensure_constraints()
-            database_run_id = loader.graph_state_run_id()
             if previous:
                 snapshot_run_id = previous.get("run_id")
-                if not snapshot_run_id or database_run_id != snapshot_run_id:
+                database_run_id = loader.graph_state_run_id()
+                if snapshot_run_id != database_run_id:
+                    # Snapshot and Neo4j disagree: upsert every current node.
+                    # Do not delete first — DETACH DELETE would drop historical
+                    # (:IndexRun)-[:TOUCHED]->(:Symbol) edges, and a missing
+                    # local snapshot (gitignore, unrestored CI graph) must not
+                    # tear down a shared database.
                     previous = None
                     stats.consistency_recovery = True
-            elif database_run_id and not full:
-                stats.consistency_recovery = True
-            if full or stats.consistency_recovery:
-                loader.clear_code_graph()
 
         diff = diff_snapshot(previous, nodes, edges)
         stats.unchanged_nodes = diff.unchanged
@@ -143,7 +149,7 @@ def run_pipeline(
         loader.load_index_run(run)
         stats.deleted_edges = loader.delete_edges(diff.delete_edge_keys)
         stats.deleted_nodes = loader.delete_nodes(diff.delete_node_ids)
-        loader.set_graph_state(run.id)
+        loader.set_graph_state(run)
         append_run(cfg.ir_dir, run)
         save_snapshot(cfg.ir_dir, build_snapshot(nodes, edges, run_id=run.id))
     finally:
