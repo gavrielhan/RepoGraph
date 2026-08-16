@@ -191,9 +191,17 @@ add these repository or organization secrets:
 - `REPOGRAPH_CLONE_TOKEN` when indexing private repositories other than the
   repository running the workflow; grant only `contents: read`.
 
-For a cross-repository graph, use one dedicated graph repository, list all
-target repositories in the action's `repos` input, and use a read-only PAT
-that can clone them.
+For a real cross-repository graph, use one dedicated graph repository:
+
+1. Copy `examples/dedicated-graph-workflow.yml` into that repository.
+2. Put every target repository in its `repograph.yaml`.
+3. Copy `examples/service-dispatch.yml` into each service so pushes trigger the
+   central rebuild.
+4. Configure a read-only `REPOGRAPH_CLONE_TOKEN` for private source repos and
+   a `REPOGRAPH_DISPATCH_TOKEN` in each service that can dispatch to the graph
+   repository.
+
+The scheduled rebuild in the example is a safety net for missed dispatches.
 
 ## Headless use
 

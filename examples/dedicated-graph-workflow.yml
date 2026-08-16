@@ -1,0 +1,67 @@
+# Put this in a dedicated graph repository as .github/workflows/repograph.yml.
+# Keep a repograph.yaml in that repository with the complete `repos:` list.
+# Every service sends repository_dispatch when its main branch changes (see
+# service-dispatch.yml), causing this workflow to rebuild the cross-repo graph.
+
+name: rebuild cross-repo graph
+
+on:
+  workflow_dispatch:
+  repository_dispatch:
+    types: [repograph-update]
+  schedule:
+    # Safety net in case a service dispatch is missed.
+    - cron: "17 3 * * *"
+
+concurrency:
+  group: repograph-cross-repo
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Restore previous graph
+        run: |
+          git fetch origin graph:refs/remotes/origin/graph || true
+          if git rev-parse --verify --quiet origin/graph; then
+            git restore --source origin/graph -- graph
+          fi
+
+      - name: Rebuild every configured repository
+        uses: gavrielhan/RepoGraph/action@main
+        with:
+          # An empty repos input makes the action read repos from repograph.yaml.
+          clone-dir: repos
+          ir-dir: graph
+          neo4j-uri: ${{ secrets.NEO4J_URI }}
+          neo4j-password: ${{ secrets.NEO4J_PASSWORD }}
+          github-token: ${{ secrets.REPOGRAPH_CLONE_TOKEN }}
+
+      - name: Publish graph branch
+        run: |
+          cp -R graph "${RUNNER_TEMP}/repograph-graph"
+          rm -rf graph
+          if git rev-parse --verify --quiet origin/graph; then
+            git switch -C graph origin/graph
+          else
+            git switch --orphan graph
+            git rm -rf . || true
+          fi
+          cp -R "${RUNNER_TEMP}/repograph-graph" graph
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add graph
+          if git diff --cached --quiet; then
+            echo "No graph changes."
+            exit 0
+          fi
+          git commit -m "index ${GITHUB_SHA}"
+          git push origin graph
