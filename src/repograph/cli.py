@@ -3,7 +3,8 @@
 Commands:
   activate  interactive: auth -> selection -> clone -> pipeline -> load
   run       headless (CI): token + repo list from env/config
-    query     blast-radius of the current branch, a PR, a diff, or a symbol
+  query     blast-radius of the current branch, a PR, a diff, or a symbol
+  find      resolve a partial name into deterministic symbol IDs
   runs      list index runs (what each graph build changed)
   reindex   fetch, then re-run parse/resolve/load (incremental unless --full)
 
@@ -270,6 +271,12 @@ def _resolve_changed(
     diff_repo,
 ) -> tuple[str, list[str]]:
     if changed_id:
+        known_ids = {node.id for node in _load_nodes(cfg)}
+        if changed_id not in known_ids:
+            raise click.ClickException(
+                f"symbol ID is not present in {cfg.ir_dir / 'nodes.jsonl'}; "
+                "use `repograph find <name>` instead of guessing an ID"
+            )
         return changed_id, [changed_id]
 
     nodes = _load_nodes(cfg)
@@ -290,7 +297,6 @@ def _resolve_changed(
         ids = _ids_from_ranges(nodes, graph_repo, ranges)
         title = meta.get("title") or f"#{number}"
         header = f"PR {meta['full_name']}#{number} ({title})"
-        click.echo(f"{header}: {len(ids)} changed symbol(s) vs {meta.get('base') or 'base'}")
         return header, ids
 
     if branch_ref is not None:
@@ -310,13 +316,12 @@ def _resolve_changed(
         ids = _ids_from_ranges(nodes, graph_repo, ranges)
         name = current_branch(root) if branch == "HEAD" else branch
         header = f"branch {name} vs {resolved_base}"
-        extra = "" if committed else " (including uncommitted changes)"
-        click.echo(f"{header}{extra}: {len(ids)} changed symbol(s)")
+        if not committed:
+            header += " (including uncommitted changes)"
         return header, ids
 
     # --diff <ref>
     ids = _ids_from_diff(cfg, diff_ref, diff_repo, nodes)
-    click.echo(f"Changed nodes from diff against {diff_ref}: {len(ids)}")
     return f"diff vs {diff_ref}", ids
 
 
@@ -377,6 +382,31 @@ def _ids_from_diff(cfg: Config, ref: str, only_repo: str | None, nodes=None) -> 
         if graph_repo:
             out.extend(changed_node_ids(nodes, graph_repo, ranges))
     return sorted(set(out))
+
+
+# --------------------------------------------------------------------------
+
+
+@main.command()
+@_common_options
+@click.argument("pattern")
+@click.option("--limit", default=50, show_default=True, help="Maximum matches.")
+@click.option("--json", "json_output", is_flag=True, help="Emit structured JSON.")
+def find(pattern, limit, json_output, **kwargs):
+    """Find symbol IDs by name, path, signature, or ID substring."""
+    cfg = _cfg(kwargs)
+    from repograph.query.find import find_symbols
+
+    matches = find_symbols(_load_nodes(cfg), pattern, limit=limit)
+    if json_output:
+        click.echo(json.dumps(matches, sort_keys=True))
+        return
+    if not matches:
+        click.echo(f"No indexed symbols match {pattern!r}.")
+        return
+    for match in matches:
+        owner = f"  owner={match['owner']}" if match.get("owner") else ""
+        click.echo(f"{match['id']}  kind={match['kind']}{owner}")
 
 
 # --------------------------------------------------------------------------

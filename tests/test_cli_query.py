@@ -54,3 +54,31 @@ def test_query_json_includes_freshness_and_results(tmp_path):
     assert payload["freshness"]["repo_count"] == 2
     assert payload["count"] == 1
     assert payload["results"][0]["id"] == "app::b.py::use"
+
+
+def test_find_returns_symbol_ids(tmp_path):
+    ir_dir = tmp_path / "graph"
+    write_jsonl(ir_dir / "nodes.jsonl", [
+        Node(
+            id="app::jobs.py::run_job", kind="function", name="run_job",
+            repo="app", path="jobs.py", owner="@jobs",
+        ),
+    ])
+    write_jsonl(ir_dir / "edges.jsonl", [])
+    result = CliRunner().invoke(
+        main, ["find", "run_job", "--json", "--ir-dir", str(ir_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)[0]["id"] == "app::jobs.py::run_job"
+
+
+def test_query_rejects_unknown_guessed_symbol_id(tmp_path):
+    ir_dir = tmp_path / "graph"
+    write_jsonl(ir_dir / "nodes.jsonl", [])
+    write_jsonl(ir_dir / "edges.jsonl", [])
+    result = CliRunner().invoke(main, [
+        "query", "--offline", "--ir-dir", str(ir_dir),
+        "--changed", "app::jobs.py::guessed",
+    ])
+    assert result.exit_code != 0
+    assert "repograph find" in result.output

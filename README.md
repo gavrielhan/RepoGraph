@@ -134,15 +134,17 @@ A PR number by itself uses the checkout's `origin` remote. Private PRs require
 
 ### One known symbol
 
-Symbol IDs use `repo::path::qualified_name`:
+Find the deterministic ID first, then query it:
 
 ```bash
+repograph find run_job
 repograph query --changed 'service::src/jobs.py::run_job'
 ```
 
 For agents, CI, and dashboards, use structured output:
 
 ```bash
+repograph find run_job --json
 repograph query --offline --json
 ```
 
