@@ -1,7 +1,14 @@
 from pathlib import Path
 
 from repograph.ir import Edge, Node
-from repograph.load.history import append_run, build_index_run, load_runs
+from repograph.load.history import (
+    IndexRun,
+    append_run,
+    build_index_run,
+    format_freshness,
+    freshness,
+    load_runs,
+)
 from repograph.load.snapshot import SnapshotDiff
 from repograph.query.blast_radius import blast_radius_ir
 
@@ -42,3 +49,21 @@ def test_blast_radius_ir_walks_callers():
     assert ids["app::r.py::use"]["distance"] == 1
     assert ids["app::r.py::wrap"]["distance"] == 2
     assert ids["app::r.py::wrap"]["confidence"] == 0.8
+
+
+def test_freshness_reports_stale_index(tmp_path):
+    append_run(
+        tmp_path,
+        IndexRun(
+            id="old",
+            sha="abcdef123456",
+            at="2020-01-01T00:00:00Z",
+            source="ci",
+            repo_shas={"app": "abcdef"},
+        ),
+    )
+    info = freshness(tmp_path)
+    assert info["stale"]
+    assert info["repo_count"] == 1
+    assert "older than" in info["warning"]
+    assert format_freshness(info).startswith("WARNING:")

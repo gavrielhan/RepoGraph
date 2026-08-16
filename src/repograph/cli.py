@@ -183,7 +183,11 @@ def query(changed_id, diff_ref, branch_ref, pr_spec, base_ref, committed, diff_r
         branch_ref = "HEAD"  # default: current branch / possible PR
 
     header, changed_ids = _resolve_changed(cfg, changed_id, diff_ref, branch_ref, pr_spec, base_ref, committed, diff_repo)
+    from repograph.load.history import format_freshness, freshness
+
+    fresh = freshness(cfg.ir_dir)
     if not changed_ids:
+        click.echo(format_freshness(fresh))
         click.echo("No indexed symbols in this change; nothing to report.")
         return
 
@@ -196,6 +200,7 @@ def query(changed_id, diff_ref, branch_ref, pr_spec, base_ref, committed, diff_r
             if prev is None or (r.get("confidence") or 0) > (prev.get("confidence") or 0):
                 seen[r["id"]] = r
     results = sorted(seen.values(), key=lambda r: (r.get("distance", 0), -(r.get("confidence") or 0)))
+    click.echo(format_freshness(fresh))
     click.echo(format_results(results, header, changed_ids=changed_ids))
 
 

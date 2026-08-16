@@ -18,6 +18,7 @@ import os
 import subprocess
 import time
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 from repograph.ids import parse_id
@@ -157,6 +158,71 @@ def load_runs(ir_dir: Path) -> list[IndexRun]:
     return runs
 
 
+def latest_run(ir_dir: Path) -> IndexRun | None:
+    runs = load_runs(ir_dir)
+    return runs[-1] if runs else None
+
+
+def freshness(ir_dir: Path, stale_after_days: int = 7) -> dict:
+    """Return machine-readable graph freshness for CLI and agent consumers."""
+    run = latest_run(ir_dir)
+    if run is None:
+        return {
+            "available": False,
+            "stale": True,
+            "warning": f"No index history found in {ir_dir / RUNS_FILENAME}.",
+            "ir_dir": str(ir_dir),
+        }
+
+    invalid_timestamp = False
+    try:
+        indexed_at = datetime.fromisoformat(run.at.replace("Z", "+00:00"))
+        age_seconds = max(0, int((datetime.now(timezone.utc) - indexed_at).total_seconds()))
+    except ValueError:
+        age_seconds = 0
+        invalid_timestamp = True
+    stale = age_seconds > stale_after_days * 86400
+    fetch_status = getattr(run, "fetch_status", {}) or {}
+    failed_fetches = sorted(
+        repo for repo, status in fetch_status.items()
+        if status.get("status") == "failed"
+    )
+    warnings = []
+    if invalid_timestamp:
+        warnings.append("index timestamp is invalid")
+    if stale:
+        warnings.append(f"graph is older than {stale_after_days} days")
+    if failed_fetches:
+        warnings.append("fetch failed for " + ", ".join(failed_fetches))
+    return {
+        "available": True,
+        "run_id": run.id,
+        "sha": run.sha,
+        "indexed_at": run.at,
+        "age_seconds": age_seconds,
+        "age_days": round(age_seconds / 86400, 2),
+        "stale": stale or bool(failed_fetches) or invalid_timestamp,
+        "repo_count": len(run.repo_shas),
+        "repo_shas": run.repo_shas,
+        "fetch_status": fetch_status,
+        "warning": "; ".join(warnings) if warnings else None,
+        "ir_dir": str(ir_dir),
+    }
+
+
+def format_freshness(info: dict) -> str:
+    if not info.get("available"):
+        return f"WARNING: {info['warning']}"
+    age = _format_age(info["age_seconds"])
+    line = (
+        f"Graph indexed {info['indexed_at']} ({age} ago), "
+        f"sha={info['sha'][:12]}, repos={info['repo_count']}."
+    )
+    if info.get("warning"):
+        return f"WARNING: {info['warning']}.\n{line}"
+    return line
+
+
 def format_runs(runs: list[IndexRun], limit: int = 20) -> str:
     if not runs:
         return "No index runs recorded yet."
@@ -193,3 +259,13 @@ def _git_sha(root: Path) -> str | None:
     if result.returncode != 0:
         return None
     return result.stdout.strip() or None
+
+
+def _format_age(seconds: int) -> str:
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    if seconds < 86400:
+        return f"{seconds // 3600}h"
+    return f"{seconds // 86400}d"
